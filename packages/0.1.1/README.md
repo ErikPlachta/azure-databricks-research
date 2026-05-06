@@ -1,0 +1,152 @@
+# 0.1.1 — Medallion lake simulation (schema-split + cascading MVs)
+
+4-tier medallion (pre-bronze → bronze → silver `investments` + `investments_history` → gold per-team) for evaluating MV-placement strategies in a multi-source, multi-team analytics stack. Lives in its own Unity Catalog catalog (`medallion_demo`) so it doesn't touch `0.0.1` in `workspace`.
+
+## What changed from 0.1.0
+
+| Change | Why |
+| ------ | --- |
+| Silver schema split: `investments` (17 current) + `investments_history` (6: monthend/cancels/bridge) | Free Edition caps schemas at 100 objects. 0.1.0's `investments` hit the cap. Split mirrors user's enterprise `investments` + `investments_historical` pattern. |
+| Cascading MV references (silver mv → bronze mv, gold mv → silver mv) | 0.1.0's gold MV materialization took 2.5+ hours because gold mv bodies referenced silver views (full re-cascade). New pattern: mv reads from already-materialized upstream mv. Drops to ~5–10 min total. |
+| Byte-equality contract relaxed | v* and mv* SELECT projections still mechanically derivable (`s/v/mv/g` substitution at upstream refs). `v*` references upstream `v*` (slow path = production reality). `mv*` references upstream `mv*` (fast cascading path = MV value-add). |
+
+## Prereq — create the catalog (one-time)
+
+```sql
+-- Run once. Free Edition: supported. See 00_setup/00_create_catalog.sql.
+-- medallion_demo is shared between 0.1.0 and 0.1.1 — they don't co-exist
+-- in the same deploy (teardown + re-run to switch versions).
+CREATE CATALOG IF NOT EXISTS medallion_demo
+  COMMENT 'azure-databricks 0.1.0 + 0.1.1 medallion-lake demo';
+```
+
+After this, every subsequent SQL file uses `EXECUTE IMMEDIATE 'USE CATALOG ' || catalog_name;` to scope to `medallion_demo`. Override `catalog_name` in `01_config.sql` if you want a different name.
+
+## Run order
+
+```
+00_setup/00_create_catalog.sql      ← one-time, idempotent
+00_setup/01_config.sql              ← session vars (re-run per SQL editor session)
+00_setup/03_refresh_orchestrator.sql ← master refresh proc (run once after layers exist)
+01_pre_bronze/01_schemas.sql        ← raw_state_street | raw_aladdin | raw_aspen | raw_efront | raw_internal_admin | raw_bloomberg
+01_pre_bronze/02_tables_*.sql       ← 6 source-system table files
+01_pre_bronze/08_seed.sql           ← deterministic 10-team multi-source seed (~5-10 min on Free Edition)
+02_bronze/01_schema.sql             ← bronze schema
+02_bronze/02_crosswalk.sql          ← bronze.crosswalk + fn_resolve_*
+02_bronze/03_tables.sql             ← t_<entity> Delta tables
+02_bronze/04_views.sql              ← v<entity> with precedence + provenance
+02_bronze/05_materialized_views.sql ← mv<entity>, byte-identical to v<entity> (raw has no v/mv split)
+02_bronze/06_refresh_procs.sql      ← table-population procs
+02_bronze/07_lineage_audit.sql      ← bronze_lineage_audit view
+03_silver/01_schema.sql             ← creates 2 schemas: investments + investments_history
+03_silver/02_tables.sql             ← t_<entity> across both schemas (17 + 6 = 23 entities)
+03_silver/03_views.sql              ← v<entity> (slow path: references upstream v*)
+03_silver/04_materialized_views.sql ← mv<entity> (cascading: references bronze.mv*)
+03_silver/05_refresh_procs.sql      ← per-entity + master refresh_all() (cross-schema)
+03_silver/06_documentation.sql      ← ALTER TABLE … COMMENT for both schemas
+04_gold/*.sql                       ← 5 team_pd_* + gold_pd_consolidated; gold mv → silver mv
+00_setup/02_teardown.sql            ← gated by RUN_TEARDOWN; drops all 14 schemas
+```
+
+`05_validate/*.sql` and `06_demos/*.sql` are **deferred** — not in 0.1.1's scope. They will land in a later 0.1.x version (see `packages/azure-databricks/PLAN.md`).
+
+`USE CATALOG` runs at the top of every file. SQL editor multi-tab users must re-run `01_config.sql` per tab.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  raw_state_street    raw_aladdin    raw_aspen    raw_efront                  │
+│  raw_internal_admin  raw_bloomberg                                           │ pre-bronze (tables only)
+│        │                  │            │            │            │      │   │
+│        └──────────────────┴────────────┴────────────┴────────────┴──────┘   │
+│                                       │                                      │
+│                            bronze.crosswalk                                  │
+│                                       │                                      │
+│  bronze: vsecurity / ventity / vasset / vportfolio / vposition /             │
+│          vtransaction / vcontract / vcollateral / vsecurity_price /          │ bronze (t / v / mv triplet)
+│          vportfolio_risk / vportfolio_performance / vrating /                │
+│          vbusiness_unit / vfx_rate                                           │
+│                                       │                                      │
+│  silver (split into 2 schemas — Free Edition 100/schema cap):                │
+│                                                                              │
+│  investments (current, 17 entities):                                         │
+│    facts: vcontract_details_fact / vcontract_summary_fact /                  │
+│           vportfolio_analytics_fact / vposition_analytics_fact /             │ silver (t / v / mv triplet)
+│           vsecurity_master_fact / vsecurity_price_fact /                     │
+│           vtransactions_collateral_lifecycle_fact /                          │
+│           vtransactions_collateral_settlement_fact                           │
+│    dims:  vsecurity_dim / vsecurity_rating_dim / vcontract_dim /             │
+│           vportfolio_dim / ventity_dim / vsecurity_industry_dim /            │
+│           vreporting_group_dim / vbusiness_unit_dim / vfx_rate_dim           │
+│                                                                              │
+│  investments_history (history/corrections, 6 entities):                      │
+│    monthend: vposition_monthend_fact / vportfolio_analytics_monthend_fact    │
+│    cancels:  vcontract_details_cancels_fact / vposition_cancels_fact /       │
+│              vsecurity_price_cancels_fact                                    │
+│    bridge:   vincome_bridge                                                  │
+│                                       │                                      │
+│  gold: team_pd_direct_lending / team_pd_distressed / team_pd_mezzanine /     │
+│        team_pd_real_estate_debt / team_pd_specialty_finance                  │ gold (t / v / mv triplet)
+│        gold_pd_consolidated (cross-team UNION)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+5 PD-strategy teams live in gold. 5 non-PD teams (`team_re_core`, `team_re_value_add`, `team_pe_buyout`, `team_infra`, `team_public_equity`) have rows in `vbusiness_unit_dim` + facts but no gold schema in 0.1.1 (see `packages/azure-databricks/PLAN.md` 0.1.2).
+
+## MV-placement scenarios
+
+| Scenario | bronze | silver | gold  | Lesson                                                                                          |
+| -------- | ------ | ------ | ----- | ----------------------------------------------------------------------------------------------- |
+| **S0**   | `v*`   | `v*`   | `v*`  | Production reality. Likely timeouts on the headline cross-team query.                           |
+| **S1**   | `v*`   | `v*`   | `mv*` | Cache final answer per team. Cheap. 5 PD teams = 5 separate MVs.                                |
+| **S2**   | `v*`   | `mv*`  | `v*`  | Cross-team reuse — 1 silver MV refresh services all 10 teams. Often the production-recommended. |
+| **S3**   | `v*`   | `mv*`  | `mv*` | Cascading. Best query speed, refresh chains.                                                    |
+| **S4**   | `mv*`  | `mv*`  | `mv*` | Counter-pattern. Refresh cost spirals.                                                          |
+
+## Demo queries
+
+**Deferred — not in 0.1.1.** `06_demos/*.sql` will land in a later 0.1.x version with 3 contrasting headlines × 5 MV-placement scenarios (cross-team report → S2; single-team concentration → S1; simple per-team summary → S0). Track in `packages/azure-databricks/PLAN.md`.
+
+## Free Edition vs paid
+
+`01_config.sql` defaults are sized for Free Edition compute (~100K total positions, ~5-10 min initial MV materialization). Paid workspace override (commented inline) flips to ~2.5M positions. To switch:
+
+```sql
+SET VARIABLE seed_n_securities                = 700;
+SET VARIABLE seed_n_entities                  = 200;
+SET VARIABLE seed_n_assets                    = 300;
+SET VARIABLE seed_n_contracts                 = 500;
+SET VARIABLE seed_positions_per_team_per_year = 10000;
+SET VARIABLE seed_txns_per_security_per_year  = 20;
+```
+
+Free Edition limits (per [MS Learn](https://learn.microsoft.com/en-us/azure/databricks/getting-started/free-edition-limitations)): one workspace, one metastore (catalogs OK), serverless compute only, 2X-Small SQL warehouse, daily quota.
+
+## Teardown
+
+```sql
+SET VARIABLE RUN_TEARDOWN = TRUE;
+-- run 00_setup/02_teardown.sql
+```
+
+Drops every schema/object 0.1.0 or 0.1.1 created (14 schemas: 6 raw + bronze + investments + investments_history + 5 gold team + gold_pd_consolidated). Catalog itself is not dropped (shared between versions).
+
+## Verification
+
+**`05_validate/` deferred — not in 0.1.1.** Manual smoke checks until then:
+
+- Per-schema object count <100: `SELECT table_schema, count(*) FROM information_schema.tables WHERE table_catalog = 'medallion_demo' GROUP BY 1 ORDER BY 2 DESC;`
+- Silver MV materialization completes in minutes (not hours) thanks to cascading.
+- Gold MV materialization completes in ~5–10 min total.
+- `vposition_analytics_fact` row count ~20–25K at default seed.
+- `team_pd_*.vposition_analytics_fact` returns non-zero rows for its bu_code.
+
+Planned validation (future 0.1.x): `01_test_scenarios.sql`, `02_fk_integrity.sql`, `03_view_mv_parity.sql` (note: parity becomes "mechanical derivability" check per DECISIONS.md #13), `04_scd2_integrity.sql`.
+
+## Key contracts
+
+- **Catalog isolation**: `medallion_demo` is shared between 0.1.0 and 0.1.1 (one version active at a time, swap via teardown + re-run). Don't co-deploy with 0.0.1 in the same catalog.
+- **View/MV mechanical derivability** (DECISIONS.md #13, supersedes #6 for 0.1.1+): `v<entity>` and `mv<entity>` SELECT bodies are no longer byte-identical, but `mv<entity>` IS derivable from `v<entity>` by `s/v/mv/g` substitution at every upstream FROM/JOIN/IN reference. `v*` reads upstream `v*` (slow path); `mv*` reads upstream `mv*` (fast cascading). Bronze layer is the exception — its v/mv are still byte-identical because raw has no v/mv split.
+- **Silver schema split** (DECISIONS.md #12): 17 current entities live in `investments`; 6 history/correction entities (monthend, cancels, bridge) live in `investments_history`. Cross-schema FROM clauses are normal — historical reads from current.
+- **Schema-qualified two-part names**: every reference is `<schema>.<entity>`, not `<catalog>.<schema>.<entity>`. Catalog is set per session via `USE CATALOG`.

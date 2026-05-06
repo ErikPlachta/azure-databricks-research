@@ -1,0 +1,85 @@
+# azure-databricks — DECISIONS
+
+Per-decision rationale for the `0.1.0` medallion design and its relationship to `0.0.1`. Append-only.
+
+## 1. 0.0.1 Kimball → 0.1.0 medallion (architectural break)
+
+**2026-04-27.** 0.0.1 is a single-tier Bridge-Framework Kimball model (`dim`/`bridge`/`fact`/`mart`) optimized for a single analytics consumer. 0.1.0 simulates a multi-source, multi-team enterprise lake to evaluate MV-placement strategies. Different question; different design. 0.0.1 isn't deprecated — it's the right answer for "what does a clean Kimball model look like." 0.1.0 is the right answer for "where do MVs pay off in a layered view stack." Both ship side-by-side in separate Unity Catalog catalogs.
+
+## 2. Why 6 source systems (vs 4 or 1)
+
+**2026-04-27.** User's enterprise env has many sources; demo modelling 1 source loses the bronze unification lesson. 4 sources (state_street/aladdin/aspen/efront) cover the financial-domain breadth. Two more added: `raw_internal_admin` (org/HR for `vbusiness_unit_dim` lineage — without this, team metadata has no plausible source) and `raw_bloomberg` (FX rates — without this, currency normalization has no source). 6 is the smallest set that gives every silver entity a plausible bronze lineage.
+
+## 3. Bronze unification precedence per entity
+
+**2026-04-27.** Aspen treated as default source-of-truth for master attributes (per user). Per-entity precedence in plan §"Bronze precedence". Provenance columns (`<col>_source`, `_source_pref`, `_sources_in_conflict`) emitted on every bronze view; `bronze_lineage_audit` view (07) summarizes hole/conflict counts. Aspen winning isn't absolute — `vsecurity_price` defers to state_street; `vcontract` defers to efront; etc. Provenance makes precedence behavior auditable at row-level rather than buried in code.
+
+## 4. eFront table-shape inferences
+
+**2026-04-27.** User doesn't have eFront's real schema; "use industry-standard". 0.1.0 infers the following:
+
+- `contract_raw` — contract terms (covenants, maturity, principal, rate)
+- `contract_summary_raw` — period-end contract snapshots
+- `contract_covenant_raw` — per-contract covenant tests + status
+- `capital_activity_raw` — calls, distributions, fund cashflows (GP/LP)
+- `collateral_exposure_raw` — collateral-level exposure measurement
+- `collateral_position_raw` — collateral-position holdings
+
+Column lists and types are best-judgement. Flagged for revision when user provides authoritative shapes (0.2.0 milestone).
+
+## 5. Tables vs MVs operational distinction
+
+**2026-04-27.** Both materialize the same logical view body. Different operational profiles:
+
+| Aspect           | `t_<entity>` table                        | `mv<entity>` MV                                                     |
+| ---------------- | ----------------------------------------- | ------------------------------------------------------------------- |
+| Refresh trigger  | Manual via `usp_refresh_<entity>`         | Databricks-managed (manual now; SCHEDULE in 0.1.4)                  |
+| Refresh strategy | Explicit `INSERT OVERWRITE`               | Enzyme-chosen: ROW_BASED / PARTITION_OVERWRITE / COMPLETE_RECOMPUTE |
+| Cost visibility  | Single explicit run                       | `event_log()` + Catalog Explorer                                    |
+| Bypass support   | Yes (just don't run the proc)             | No (MV always tracks its source)                                    |
+| Best for         | Nightly batch where source rarely changes | Continuous/incremental refresh                                      |
+
+The 0.1.0 demo gradient groups them as "materialized." Production callers must read this entry before swapping a t* for an mv* or vice-versa.
+
+## 6. View/MV byte-equality contract (permanent invariant)
+
+**2026-04-27.** For every entity at every layer, `v<entity>` and `mv<entity>` SELECT bodies must be byte-identical (modulo the `CREATE` clause). This is the load-bearing invariant for apples-to-apples timing comparisons in `06_demos/`. A future refactor that drifts them silently breaks the pedagogy and corrupts comparison results. Lint-style check planned for 0.1.7 CI.
+
+## 7. Why `_all` and `_pivot` patterns are deferred
+
+**2026-04-27.** User's enterprise list shows two patterns not strictly needed by `private_debt`'s 10 views:
+
+- `_all` siblings (UNION current + `investments_historical`) — adds a second schema, ~3 entities × 3 artifacts. ~200 LOC.
+- `_pivot` cross-tab dims — uses PIVOT operator at view time. ~2-3 entities × 3 artifacts. ~150 LOC.
+
+Skipped in 0.1.0 to keep scope manageable. Re-add costs estimated above. Documented here so the omission is explicit, not silent — important per user emphasis.
+
+## 8. Why non-PD teams have no gold schema in 0.1.0
+
+**2026-04-27.** Plan caps gold at 5 PD-strategy schemas to keep artifact count manageable (~250 objects already). 5 non-PD teams (`team_re_core`, `team_re_value_add`, `team_pe_buyout`, `team_infra`, `team_public_equity`) are seeded into `vbusiness_unit_dim` and have allocations + facts so silver views genuinely return cross-team rows — strengthens the S2 (silver-MV cross-team-reuse) argument. Their gold schemas land in 0.1.1.
+
+## 9. SCD2-everywhere on silver dims
+
+**2026-04-27.** Per user, all 8 silver `*_dim` entities use full SCD2 (preceding/succeeding chains, effective dates, is_current). Matches 0.0.1's pattern. Heavier seed code (~600-1000 LOC for history simulation) but pedagogically faithful to enterprise reality where dims do restructure over time. `vfx_rate_dim` is the one exception — Type 2 lite (effective dates but no preceding/succeeding chains, since rates simply expire when superseded).
+
+## 10. Bloomberg = FX-only in 0.1.0
+
+**2026-04-27.** Bloomberg is the standard real-world source for both FX rates AND security pricing. State_street already provides position-side pricing in 0.1.0. Adding Bloomberg pricing now would require a precedence-rule for `vsecurity_price` (custodian-prices vs market-quoted-prices), increasing demo complexity. Deferred to 0.1.5. In 0.1.0 Bloomberg supplies FX rates only.
+
+## 11. Free Edition seed defaults
+
+**2026-04-27.** Plan §"Configuration reference" defaults size for Free Edition compute fit (~100K total positions). Each `seed_n_*` var has a paid-workspace override commented inline (~2.5M positions on paid). User can flip via session var without editing seed code. Free Edition's 1-metastore/1-workspace cap doesn't preclude multi-catalog — verified at [MS Learn Free Edition limitations](https://learn.microsoft.com/en-us/azure/databricks/getting-started/free-edition-limitations). 0.1.0 uses `medallion_demo` catalog so 0.0.1 in `workspace` stays untouched.
+
+## 12. Silver schema split (`investments` + `investments_history`) in 0.1.1
+
+**2026-04-30.** 0.1.0's `investments` schema accumulated 23 entities × 3 artifacts (t/v/mv) + MV-backing tables = exactly 100 objects, hitting Free Edition's per-schema cap. Adding any further MV blocked. Split mirrors user's enterprise pattern (`investments` + `investments_historical`). 0.1.1 keeps 17 current entities (8 SCD2 dims + fx_rate_dim + 8 base facts) in `investments`; moves 6 entities (2 monthend + 3 cancels + 1 bridge — `vposition_monthend_fact`, `vportfolio_analytics_monthend_fact`, `vcontract_details_cancels_fact`, `vposition_cancels_fact`, `vsecurity_price_cancels_fact`, `vincome_bridge`) to `investments_history`. Cross-schema FROM clauses are fine in Spark/UC. Headroom estimate: ~30 entities × 3 = 90 in `investments` (fine for 0.1.1; a 0.1.2 expansion may need a further split, e.g., `_dim` → `investments_dims`). Bronze sits at 72/100 — flagged but not split (no immediate scope expansion). See plan p00/14.
+
+## 13. Cascading MV bodies + byte-equality contract relaxation (0.1.1)
+
+**2026-04-30.** Decision 6's strict byte-equality contract caused gold MV materialization to run 2.5h+ before user cancelled — every gold mv body referenced silver `v*` (the views), forcing a full re-cascade through silver views all the way to raw on every gold MV refresh. 0.1.1 relaxes the invariant: v* and mv* SELECT projections are no longer byte-identical, but they ARE _mechanically derivable_ via `s/v/mv/g` substitution at upstream references. Specifically:
+
+- silver `mv*` references bronze `mv*` (instead of bronze `v*`)
+- gold `mv*` references silver `mv*` (instead of silver `v*`)
+- intra-layer mv references in IN/EXISTS clauses also use mv (e.g., gold mv reads gold mv, not gold v)
+
+The `v*` path stays slow (production-faithful through view stack — pedagogical for "what production reality looks like without MVs"); the `mv*` path is fast (cascading materialized — pedagogical for "what MV layering buys you"). Apples-to-apples timing comparisons in `06_demos/` still hold because the substitution is mechanical and total — every entity at every layer has a paired `v`/`mv` triplet built from the same projection. Lint check planned for 0.1.7 CI: parse v body, mechanically substitute upstream refs, diff against mv body — expect zero structural diff. Supersedes Decision 6's "byte-identical" wording for 0.1.1+; 0.1.0 retains the strict form for legacy reference.
