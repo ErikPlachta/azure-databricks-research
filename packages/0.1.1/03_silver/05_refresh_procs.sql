@@ -139,6 +139,13 @@ AS BEGIN
     INSERT OVERWRITE investments.t_vtransactions_collateral_positions_fact SELECT * FROM investments.vtransactions_collateral_positions_fact;
 END;
 
+CREATE OR REPLACE PROCEDURE investments.refresh_transaction_fact()
+LANGUAGE SQL
+SQL SECURITY INVOKER
+AS BEGIN
+    INSERT OVERWRITE investments.t_vtransaction_fact SELECT * FROM investments.vtransaction_fact;
+END;
+
 -- ----------------------------------------------------------------------------
 -- Monthend snapshots (2) — depend on base facts
 -- ----------------------------------------------------------------------------
@@ -221,6 +228,7 @@ AS BEGIN
     CALL investments.refresh_portfolio_analytics_fact();
     CALL investments.refresh_collateral_exposure_fact();
     CALL investments.refresh_collateral_positions_fact();
+    CALL investments.refresh_transaction_fact();
     -- Monthend snapshots
     CALL investments_history.refresh_position_monthend_fact();
     CALL investments_history.refresh_portfolio_analytics_monthend_fact();

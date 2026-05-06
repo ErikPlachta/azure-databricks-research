@@ -463,6 +463,39 @@ CLUSTER BY (position_date, contract_sk)
 COMMENT 'Specific securities/assets pledged as collateral against a contract on a given date.'
 TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported', 'delta.enableRowTracking' = 'true', 'delta.enableChangeDataFeed' = 'true');
 
+-- 2.20 vtransaction_fact -------------------------------------------------------
+-- Transaction-level fact joining bronze.vtransaction to silver dims for
+-- temporal-resolved portfolio_sk/security_sk + FX-converted USD amounts.
+-- Powers gold_pd_consolidated.vpd_transaction_book (DECISIONS.md #15).
+CREATE TABLE IF NOT EXISTS investments.t_vtransaction_fact (
+    transaction_fact_sk           BIGINT       NOT NULL,
+    enterprise_key                STRING       NOT NULL,
+    transaction_date              DATE         NOT NULL,
+    settlement_date               DATE,
+    portfolio_sk                  BIGINT       COMMENT 'Temporal-resolved FK to vportfolio_dim',
+    security_sk                   BIGINT       COMMENT 'Temporal-resolved FK to vsecurity_dim',
+    business_unit_sk              BIGINT,
+    transaction_type              STRING,
+    quantity                      DECIMAL(18, 4),
+    price_local                   DECIMAL(18, 6),
+    gross_amount_local            DECIMAL(18, 2),
+    gross_amount_usd              DECIMAL(18, 2) COMMENT 'gross_amount_local * fx_rate(currency_code → USD, transaction_date)',
+    fees_local                    DECIMAL(18, 2),
+    fees_usd                      DECIMAL(18, 2),
+    net_amount_local              DECIMAL(18, 2),
+    net_amount_usd                DECIMAL(18, 2),
+    currency_code                 STRING,
+    fx_rate_to_usd                DECIMAL(18, 8),
+    counterparty_name             STRING,
+    custodian_account             STRING,
+    trade_status                  STRING,
+    bronze_loaded_at              TIMESTAMP,
+    silver_loaded_at              TIMESTAMP    NOT NULL DEFAULT current_timestamp()
+)
+CLUSTER BY (transaction_date, portfolio_sk)
+COMMENT 'Transaction fact: bronze.vtransaction enriched with dim_sks + USD normalization. Powers gold_pd_consolidated.vpd_transaction_book.'
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported', 'delta.enableRowTracking' = 'true', 'delta.enableChangeDataFeed' = 'true');
+
 -- ============================================================================
 -- CANCEL SIBLINGS (3)
 -- ============================================================================

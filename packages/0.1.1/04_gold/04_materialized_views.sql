@@ -451,9 +451,133 @@ SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contra
 FROM investments.mvtransactions_collateral_positions_fact cp
 WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_pd_specialty_finance.mvcontract_details_fact);
 
+-- ============================================================================
+-- SECTION G — gold_pd_consolidated (3 cascading-MV cross-team UNIONs)
+--
+-- Mechanically derived from gold_pd_consolidated.v* in 03_views.sql via
+-- `s/v/mv/g` at every upstream ref (DECISIONS.md #13). position_book +
+-- contract_book cascade through team_pd_*.mv*; transaction_book cascades
+-- through investments.mvtransaction_fact (silver) which in turn reads
+-- bronze.mvtransaction (DECISIONS.md #15).
+-- ============================================================================
+
+-- G.1 mvpd_position_book -----------------------------------------------------
+CREATE OR REPLACE MATERIALIZED VIEW gold_pd_consolidated.mvpd_position_book AS
+WITH cross_team AS (
+    SELECT 'team_pd_direct_lending' AS team_code,
+           p.enterprise_key, p.position_date, p.portfolio_sk, p.security_sk, p.business_unit_sk,
+           p.market_value_usd, p.book_value_usd, p.cost_basis_usd, p.unrealized_gl_usd,
+           p.concentration_pct, p.portfolio_rank, p.currency_code, p.silver_loaded_at
+    FROM team_pd_direct_lending.mvposition_analytics_fact p
+    UNION ALL
+    SELECT 'team_pd_distressed', p.enterprise_key, p.position_date, p.portfolio_sk, p.security_sk, p.business_unit_sk,
+           p.market_value_usd, p.book_value_usd, p.cost_basis_usd, p.unrealized_gl_usd,
+           p.concentration_pct, p.portfolio_rank, p.currency_code, p.silver_loaded_at
+    FROM team_pd_distressed.mvposition_analytics_fact p
+    UNION ALL
+    SELECT 'team_pd_mezzanine', p.enterprise_key, p.position_date, p.portfolio_sk, p.security_sk, p.business_unit_sk,
+           p.market_value_usd, p.book_value_usd, p.cost_basis_usd, p.unrealized_gl_usd,
+           p.concentration_pct, p.portfolio_rank, p.currency_code, p.silver_loaded_at
+    FROM team_pd_mezzanine.mvposition_analytics_fact p
+    UNION ALL
+    SELECT 'team_pd_real_estate_debt', p.enterprise_key, p.position_date, p.portfolio_sk, p.security_sk, p.business_unit_sk,
+           p.market_value_usd, p.book_value_usd, p.cost_basis_usd, p.unrealized_gl_usd,
+           p.concentration_pct, p.portfolio_rank, p.currency_code, p.silver_loaded_at
+    FROM team_pd_real_estate_debt.mvposition_analytics_fact p
+    UNION ALL
+    SELECT 'team_pd_specialty_finance', p.enterprise_key, p.position_date, p.portfolio_sk, p.security_sk, p.business_unit_sk,
+           p.market_value_usd, p.book_value_usd, p.cost_basis_usd, p.unrealized_gl_usd,
+           p.concentration_pct, p.portfolio_rank, p.currency_code, p.silver_loaded_at
+    FROM team_pd_specialty_finance.mvposition_analytics_fact p
+)
+SELECT
+    CAST(ROW_NUMBER() OVER (ORDER BY position_date, team_code, enterprise_key) AS BIGINT) AS pd_position_book_sk,
+    team_code, enterprise_key, position_date,
+    portfolio_sk, security_sk, business_unit_sk,
+    market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    concentration_pct, portfolio_rank, currency_code,
+    silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM cross_team;
+
+-- G.2 mvpd_contract_book -----------------------------------------------------
+CREATE OR REPLACE MATERIALIZED VIEW gold_pd_consolidated.mvpd_contract_book AS
+WITH cross_team AS (
+    SELECT 'team_pd_direct_lending' AS team_code,
+           cs.enterprise_key, cs.summary_date, cs.contract_sk,
+           cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+           cs.performance_status,
+           COALESCE(cd.has_active_breach, FALSE) AS has_active_breach,
+           cs.silver_loaded_at
+    FROM team_pd_direct_lending.mvcontract_summary_fact cs
+    LEFT JOIN team_pd_direct_lending.mvcontract_details_fact cd
+        ON cd.contract_sk = cs.contract_sk AND cd.detail_date = cs.summary_date
+    UNION ALL
+    SELECT 'team_pd_distressed', cs.enterprise_key, cs.summary_date, cs.contract_sk,
+           cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd, cs.performance_status,
+           COALESCE(cd.has_active_breach, FALSE), cs.silver_loaded_at
+    FROM team_pd_distressed.mvcontract_summary_fact cs
+    LEFT JOIN team_pd_distressed.mvcontract_details_fact cd
+        ON cd.contract_sk = cs.contract_sk AND cd.detail_date = cs.summary_date
+    UNION ALL
+    SELECT 'team_pd_mezzanine', cs.enterprise_key, cs.summary_date, cs.contract_sk,
+           cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd, cs.performance_status,
+           COALESCE(cd.has_active_breach, FALSE), cs.silver_loaded_at
+    FROM team_pd_mezzanine.mvcontract_summary_fact cs
+    LEFT JOIN team_pd_mezzanine.mvcontract_details_fact cd
+        ON cd.contract_sk = cs.contract_sk AND cd.detail_date = cs.summary_date
+    UNION ALL
+    SELECT 'team_pd_real_estate_debt', cs.enterprise_key, cs.summary_date, cs.contract_sk,
+           cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd, cs.performance_status,
+           COALESCE(cd.has_active_breach, FALSE), cs.silver_loaded_at
+    FROM team_pd_real_estate_debt.mvcontract_summary_fact cs
+    LEFT JOIN team_pd_real_estate_debt.mvcontract_details_fact cd
+        ON cd.contract_sk = cs.contract_sk AND cd.detail_date = cs.summary_date
+    UNION ALL
+    SELECT 'team_pd_specialty_finance', cs.enterprise_key, cs.summary_date, cs.contract_sk,
+           cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd, cs.performance_status,
+           COALESCE(cd.has_active_breach, FALSE), cs.silver_loaded_at
+    FROM team_pd_specialty_finance.mvcontract_summary_fact cs
+    LEFT JOIN team_pd_specialty_finance.mvcontract_details_fact cd
+        ON cd.contract_sk = cs.contract_sk AND cd.detail_date = cs.summary_date
+)
+SELECT
+    CAST(ROW_NUMBER() OVER (ORDER BY summary_date, team_code, enterprise_key) AS BIGINT) AS pd_contract_book_sk,
+    team_code, enterprise_key, summary_date, contract_sk,
+    outstanding_principal_usd, accrued_interest_usd, paid_to_date_usd,
+    performance_status, has_active_breach,
+    silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM cross_team;
+
+-- G.3 mvpd_transaction_book --------------------------------------------------
+CREATE OR REPLACE MATERIALIZED VIEW gold_pd_consolidated.mvpd_transaction_book AS
+WITH pd_portfolios AS (
+    SELECT p.portfolio_sk,
+           bu.bu_code AS team_code
+    FROM investments.mvportfolio_dim p
+    JOIN investments.mvbusiness_unit_dim bu
+        ON bu.enterprise_key = p.business_unit_enterprise_key
+       AND bu.is_current = TRUE
+    WHERE p.is_current = TRUE
+      AND bu.is_pd_strategy = TRUE
+)
+SELECT
+    CAST(ROW_NUMBER() OVER (ORDER BY t.transaction_date, pp.team_code, t.enterprise_key) AS BIGINT) AS pd_transaction_book_sk,
+    pp.team_code,
+    t.enterprise_key, t.transaction_date, t.settlement_date,
+    t.portfolio_sk, t.security_sk,
+    t.transaction_type,
+    t.gross_amount_usd,
+    t.net_amount_usd,
+    t.fees_usd,
+    t.counterparty_name, t.currency_code,
+    t.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.mvtransaction_fact t
+JOIN pd_portfolios pp ON pp.portfolio_sk = t.portfolio_sk;
+
 SELECT 'gold.materialized_views complete' AS status,
        count(*) AS gold_mv_count
 FROM information_schema.tables
 WHERE table_schema IN ('team_pd_direct_lending','team_pd_distressed','team_pd_mezzanine',
-                       'team_pd_real_estate_debt','team_pd_specialty_finance')
+                       'team_pd_real_estate_debt','team_pd_specialty_finance','gold_pd_consolidated')
   AND table_name LIKE 'mv%';

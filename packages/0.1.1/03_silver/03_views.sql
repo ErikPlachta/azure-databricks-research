@@ -689,6 +689,57 @@ LEFT JOIN investments.vfx_rate_dim fx
    AND fx.to_currency   = 'USD'
    AND fx.rate_date     = cp.position_date;
 
+-- 3.20 vtransaction_fact -------------------------------------------------------
+-- Slow path: reads bronze.vtransaction (full cascade through view stack).
+-- Mirrors vposition_analytics_fact pattern: dedup-by-latest, temporal-resolved
+-- portfolio_sk + security_sk, USD normalization via vfx_rate_dim.
+CREATE OR REPLACE VIEW investments.vtransaction_fact AS
+WITH bt_latest AS (
+    SELECT * FROM (
+        SELECT bt.*,
+            ROW_NUMBER() OVER (PARTITION BY bt.enterprise_key ORDER BY bt.bronze_loaded_at DESC) AS _rn
+        FROM bronze.vtransaction bt
+    ) WHERE _rn = 1
+)
+SELECT
+    ROW_NUMBER() OVER (ORDER BY bt.transaction_date, bt.enterprise_key) AS transaction_fact_sk,
+    bt.enterprise_key,
+    bt.transaction_date,
+    bt.settlement_date,
+    p_dim.portfolio_sk,
+    s_dim.security_sk,
+    p_dim_bu.business_unit_sk,
+    bt.transaction_type,
+    bt.quantity,
+    bt.price_local,
+    bt.gross_amount_local,
+    CAST(bt.gross_amount_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2)) AS gross_amount_usd,
+    bt.fees_local,
+    CAST(bt.fees_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2))         AS fees_usd,
+    bt.net_amount_local,
+    CAST(bt.net_amount_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2))   AS net_amount_usd,
+    bt.currency_code,
+    fx.fx_rate AS fx_rate_to_usd,
+    bt.counterparty_name,
+    bt.custodian_account,
+    bt.trade_status,
+    bt.bronze_loaded_at,
+    current_timestamp() AS silver_loaded_at
+FROM bt_latest bt
+LEFT JOIN investments.vportfolio_dim p_dim
+    ON p_dim.enterprise_key = bt.portfolio_enterprise_key
+   AND bt.transaction_date BETWEEN p_dim.effective_start_date AND p_dim.effective_end_date
+LEFT JOIN investments.vsecurity_dim s_dim
+    ON s_dim.enterprise_key = bt.security_enterprise_key
+   AND bt.transaction_date BETWEEN s_dim.effective_start_date AND s_dim.effective_end_date
+LEFT JOIN investments.vbusiness_unit_dim p_dim_bu
+    ON p_dim_bu.enterprise_key = p_dim.business_unit_enterprise_key
+   AND p_dim_bu.is_current = TRUE
+LEFT JOIN investments.vfx_rate_dim fx
+    ON fx.from_currency = bt.currency_code
+   AND fx.to_currency   = 'USD'
+   AND fx.rate_date     = bt.transaction_date;
+
 -- ============================================================================
 -- CANCEL SIBLINGS (3) — derived from duplicate-source_key pattern in pre-bronze
 -- ============================================================================

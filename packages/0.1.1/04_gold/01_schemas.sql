@@ -8,8 +8,8 @@
 -- the headline cross-team activity demo (06_demos/02_query_a_*).
 --
 -- Non-PD teams (5: re_core, re_value_add, pe_buyout, infra, public_equity)
--- exist in vbusiness_unit_dim with seed data but no gold schemas in 0.1.0
--- (PLAN.md flags 0.1.1 milestone).
+-- exist in vbusiness_unit_dim with seed data but no gold schemas in 0.1.1
+-- (PLAN.md flags 0.1.2 milestone).
 -- ============================================================================
 
 DECLARE OR REPLACE VARIABLE catalog_name STRING DEFAULT 'medallion_demo';

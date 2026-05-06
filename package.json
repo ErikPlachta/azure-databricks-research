@@ -1,12 +1,16 @@
 {
-  "name": "work-azure-databricks",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "azure-databricks-research",
+  "version": "0.1.1",
+  "description": "Azure Databricks medallion-lake R&D — view vs MV vs table demos",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "deploy": "bash scripts/runbook.sh deploy",
+    "seed": "bash scripts/runbook.sh seed",
+    "refresh": "bash scripts/runbook.sh refresh",
+    "validate": "bash scripts/runbook.sh validate",
+    "demo": "bash scripts/runbook.sh demo",
+    "teardown": "bash scripts/runbook.sh teardown"
   },
-  "keywords": [],
+  "keywords": ["databricks", "medallion", "materialized-views", "delta-lake"],
   "author": "",
   "license": "ISC",
   "packageManager": "pnpm@10.23.0"

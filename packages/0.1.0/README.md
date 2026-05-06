@@ -1,4 +1,6 @@
-# 0.1.0 — Medallion lake simulation
+# 0.1.0 — Medallion lake simulation (predecessor reference)
+
+> **Predecessor**. New work lands in `packages/0.1.1/` (silver schema split + cascading MVs + 05_validate/ + 06_demos/). 0.1.0 is retained for the cap-hit reference: its `investments` schema accumulated 100 objects under Free Edition's per-schema cap, motivating the 0.1.1 split. See `DECISIONS.md` #12 + #13 for the migration rationale.
 
 4-tier medallion (pre-bronze → bronze → silver `investments` → gold per-team) for evaluating MV-placement strategies in a multi-source, multi-team analytics stack. Lives in its own Unity Catalog catalog (`medallion_demo`) so it doesn't touch `0.0.1` in `workspace`.
 

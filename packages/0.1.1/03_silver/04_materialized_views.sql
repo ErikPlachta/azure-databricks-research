@@ -426,7 +426,44 @@ LEFT JOIN investments.mvsecurity_dim s_dim
 LEFT JOIN investments.mvfx_rate_dim fx
     ON fx.from_currency = cp.currency_code AND fx.to_currency = 'USD' AND fx.rate_date = cp.position_date;
 
--- 4.20 mvcontract_details_cancels_fact -----------------------------------------
+-- 4.20 mvtransaction_fact ------------------------------------------------------
+-- Cascading: reads bronze.mvtransaction (materialized) instead of bronze.vtransaction.
+-- Mechanically derived from investments.vtransaction_fact via s/v/mv/g.
+CREATE OR REPLACE MATERIALIZED VIEW investments.mvtransaction_fact AS
+WITH bt_latest AS (
+    SELECT * FROM (
+        SELECT bt.*, ROW_NUMBER() OVER (PARTITION BY bt.enterprise_key ORDER BY bt.bronze_loaded_at DESC) AS _rn
+        FROM bronze.mvtransaction bt
+    ) WHERE _rn = 1
+)
+SELECT
+    ROW_NUMBER() OVER (ORDER BY bt.transaction_date, bt.enterprise_key) AS transaction_fact_sk,
+    bt.enterprise_key, bt.transaction_date, bt.settlement_date,
+    p_dim.portfolio_sk, s_dim.security_sk, p_dim_bu.business_unit_sk,
+    bt.transaction_type, bt.quantity, bt.price_local,
+    bt.gross_amount_local,
+    CAST(bt.gross_amount_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2)) AS gross_amount_usd,
+    bt.fees_local,
+    CAST(bt.fees_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2))         AS fees_usd,
+    bt.net_amount_local,
+    CAST(bt.net_amount_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2))   AS net_amount_usd,
+    bt.currency_code, fx.fx_rate AS fx_rate_to_usd,
+    bt.counterparty_name, bt.custodian_account, bt.trade_status,
+    bt.bronze_loaded_at, current_timestamp() AS silver_loaded_at
+FROM bt_latest bt
+LEFT JOIN investments.mvportfolio_dim p_dim
+    ON p_dim.enterprise_key = bt.portfolio_enterprise_key
+   AND bt.transaction_date BETWEEN p_dim.effective_start_date AND p_dim.effective_end_date
+LEFT JOIN investments.mvsecurity_dim s_dim
+    ON s_dim.enterprise_key = bt.security_enterprise_key
+   AND bt.transaction_date BETWEEN s_dim.effective_start_date AND s_dim.effective_end_date
+LEFT JOIN investments.mvbusiness_unit_dim p_dim_bu
+    ON p_dim_bu.enterprise_key = p_dim.business_unit_enterprise_key
+   AND p_dim_bu.is_current = TRUE
+LEFT JOIN investments.mvfx_rate_dim fx
+    ON fx.from_currency = bt.currency_code AND fx.to_currency = 'USD' AND fx.rate_date = bt.transaction_date;
+
+-- 4.21 mvcontract_details_cancels_fact -----------------------------------------
 CREATE OR REPLACE MATERIALIZED VIEW investments_history.mvcontract_details_cancels_fact AS
 WITH amendments AS (
     SELECT regexp_replace(c2.source_key, '_v2$', '') AS original_source_key,

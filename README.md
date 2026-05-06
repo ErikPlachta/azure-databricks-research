@@ -2,12 +2,13 @@
 
 Databricks SQL artifacts for the tabular-rebuild workspace. Two artifacts ship side-by-side:
 
-| Version | Architecture                                                                  | Catalog          | Use when                                                                                                                                                   |
-| ------- | ----------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0.0.1` | Single-tier Kimball (`bridge`/`dim`/`fact`/`mart`)                            | `workspace`      | Bridge-Framework POC; SCD2 + Liquid Clustering; ~5M positions / ~280K transactions; consumed by 0.0.x PBIP fixture. Legacy archive — kept untouched.       |
-| `0.1.0` | 4-tier medallion (pre-bronze → bronze → silver `investments` → gold per-team) | `medallion_demo` | MV-placement evaluation rig. 6 source schemas, 22 silver entities, 5 PD-strategy team gold schemas, 5 MV-placement scenarios × 3 contrasting demo queries. |
+| Version | Architecture                                                                                          | Catalog          | Use when                                                                                                                                                                                                                   |
+| ------- | ----------------------------------------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0.0.1` | Single-tier Kimball (`bridge`/`dim`/`fact`/`mart`)                                                    | `workspace`      | Bridge-Framework POC; SCD2 + Liquid Clustering; ~5M positions / ~280K transactions; consumed by 0.0.x PBIP fixture. Legacy archive — kept untouched.                                                                       |
+| `0.1.0` | 4-tier medallion (pre-bronze → bronze → silver `investments` → gold per-team)                         | `medallion_demo` | Predecessor to 0.1.1 — single silver schema (hit Free Edition's 100/schema cap on gold MV cascade). Retained as cap-hit reference; new work goes to 0.1.1.                                                                 |
+| `0.1.1` | 4-tier medallion (pre-bronze → bronze → silver `investments` + `investments_history` → gold per-team) | `medallion_demo` | **Active.** Schema-split + cascading MVs (mv* reads upstream mv*; gold MV materialization 2.5h+ → ~5–10 min). 5 PD-strategy team gold schemas + `gold_pd_consolidated`. Includes `05_validate/` and `06_demos/` harnesses. |
 
-Pick `0.0.1` for the legacy Kimball reference (consumed by `fixtures/azure-databricks.pbip`). Pick `0.1.0` for the medallion-lake simulation built to evaluate where MVs pay off in a multi-source, multi-team analytics stack.
+Pick `0.0.1` for the legacy Kimball reference (consumed by `fixtures/azure-databricks.pbip`). Pick `0.1.1` for the active medallion-lake simulation; `0.1.0` is retained as predecessor reference.
 
 ## What "medallion" means
 
@@ -44,7 +45,9 @@ These SQL artifacts are authored from public Databricks docs and standard data-m
 
 ## Quick links
 
-- [`0.1.0/README.md`](0.1.0/README.md) — runbook for the medallion lake (recommended starting point)
-- [`PLAN.md`](PLAN.md) — roadmap (0.1.1 through 0.2.0)
+- [`packages/0.1.1/README.md`](packages/0.1.1/README.md) — runbook for the active medallion lake (recommended starting point)
+- [`packages/0.1.1/EXECUTION_CHECKLIST.md`](packages/0.1.1/EXECUTION_CHECKLIST.md) — manual verification checklist
+- [`packages/0.1.0/README.md`](packages/0.1.0/README.md) — predecessor reference (Free Edition cap exceeded)
+- [`PLAN.md`](PLAN.md) — roadmap (0.1.2 through 0.2.0)
 - [`DECISIONS.md`](DECISIONS.md) — architectural decisions and assumptions
-- [`0.0.1/README.md`](0.0.1/README.md) — legacy Kimball reference
+- [`packages/0.0.1/README.md`](packages/0.0.1/README.md) — legacy Kimball reference

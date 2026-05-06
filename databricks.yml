@@ -1,0 +1,71 @@
+# ============================================================================
+# Databricks Asset Bundle — work-azure-databricks
+#
+# Stub for the 0.1.7 CI smoke runner. Declares the workspace + warehouse
+# variables that downstream automation will use. Manual SQL editor flow is
+# still the primary UX for 0.1.x; programmatic deploy lives in
+# scripts/runbook.sh (today) and a full Asset Bundle job (0.1.7+).
+#
+# To use:
+#   1. Copy `.env.example` to `.env` and fill in `DATABRICKS_HOST`,
+#      `DATABRICKS_TOKEN`, `DATABRICKS_WAREHOUSE_ID`.
+#   2. `databricks bundle validate` — checks this file's syntax.
+#   3. `databricks bundle deploy --target dev` — pushes resources (none yet).
+#   4. (0.1.7+): `databricks bundle run medallion_deploy_demo` — runs the
+#      end-to-end SQL deploy as a job.
+#
+# Authority: PLAN.md "TS wrappers / programmatic SDK clients — separate
+# package if needed" out-of-scope clause is respected. Bundle YAML is
+# configuration, not code.
+# ============================================================================
+
+bundle:
+  name: work-azure-databricks
+
+variables:
+  catalog_name:
+    description: Unity Catalog catalog name
+    default: medallion_demo
+  warehouse_id:
+    description: SQL warehouse ID for serial SQL execution
+    # Set via env DATABRICKS_BUNDLE_VAR_warehouse_id or --var warehouse_id=xxx
+
+targets:
+  dev:
+    mode: development
+    workspace:
+      # host: https://<your-workspace>.azuredatabricks.net  # set in .env or via DATABRICKS_HOST
+      file_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}
+    variables:
+      catalog_name: medallion_demo
+
+  # prod target — 0.1.7+ when CI smoke runner lands
+  # prod:
+  #   mode: production
+  #   workspace:
+  #     host: https://<prod-workspace>.azuredatabricks.net
+  #   variables:
+  #     catalog_name: medallion_prod
+
+# ----------------------------------------------------------------------------
+# Resources placeholder — 0.1.7 will populate this with a job whose tasks
+# are the SQL files in packages/0.1.1/, in run order. Sketched shape:
+#
+# resources:
+#   jobs:
+#     medallion_deploy_demo:
+#       name: medallion_deploy_demo
+#       tasks:
+#         - task_key: catalog
+#           sql_task:
+#             warehouse_id: ${var.warehouse_id}
+#             file:
+#               path: packages/0.1.1/00_setup/00_create_catalog.sql
+#         - task_key: config
+#           depends_on: [{ task_key: catalog }]
+#           sql_task:
+#             warehouse_id: ${var.warehouse_id}
+#             file:
+#               path: packages/0.1.1/00_setup/01_config.sql
+#         # ... ~30 more tasks
+# ----------------------------------------------------------------------------
