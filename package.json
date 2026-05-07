@@ -8,7 +8,9 @@
     "refresh": "bash scripts/runbook.sh refresh",
     "validate": "bash scripts/runbook.sh validate",
     "demo": "bash scripts/runbook.sh demo",
-    "teardown": "bash scripts/runbook.sh teardown"
+    "teardown": "bash scripts/runbook.sh teardown",
+    "nuke": "bash scripts/runbook.sh nuke",
+    "query": "bash scripts/runbook.sh query"
   },
   "keywords": ["databricks", "medallion", "materialized-views", "delta-lake"],
   "author": "",

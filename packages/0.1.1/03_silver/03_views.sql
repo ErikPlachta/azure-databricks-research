@@ -809,7 +809,7 @@ WITH p_resolved AS (
 )
 SELECT
     ROW_NUMBER() OVER (ORDER BY p.position_date) AS cancel_sk,
-    CAST(p.source_key AS BIGINT)                 AS cancelled_position_sk, -- best-effort; original_position_sk lookup is non-trivial
+    xxhash64(p.source_key)                       AS cancelled_position_sk, -- deterministic stable BIGINT derived from source_key (original_position_sk lookup non-trivial; comment retained pre-fix)
     p_dim.portfolio_sk,
     s_dim.security_sk,
     p.position_date                              AS cancel_event_date,

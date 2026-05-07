@@ -512,7 +512,7 @@ WITH p_resolved AS (
 )
 SELECT
     ROW_NUMBER() OVER (ORDER BY p.position_date) AS cancel_sk,
-    CAST(p.source_key AS BIGINT) AS cancelled_position_sk,
+    xxhash64(p.source_key) AS cancelled_position_sk,
     p_dim.portfolio_sk, s_dim.security_sk, p.position_date AS cancel_event_date,
     p.position_date AS original_position_date, 'CROSSWALK_REMAP' AS cancel_reason,
     CAST(p.market_value_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2)) AS cancelled_market_value_usd,

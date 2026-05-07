@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
 # ============================================================================
 # scripts/runbook.sh
-# Programmatic deploy / refresh / teardown / validate / demo runner for the
-# 0.1.1 medallion stack. Submits each SQL file to a Databricks SQL warehouse
-# via the /api/2.0/sql/statements REST endpoint (stable across CLI versions).
+# High-level command dispatcher for the 0.1.1 medallion stack. Thin wrapper
+# over scripts/dbx_run.py — keeps the runbook order and command names here,
+# delegates SQL submission to the Python engine.
 #
 # Subcommands:
-#   deploy    — runs every 0.1.1 SQL file in run order (excludes teardown).
-#   seed      — runs only 01_pre_bronze/08_seed.sql.
-#   refresh   — calls bronze_silver_gold_refresh().
-#   validate  — runs every 05_validate/*.sql in order.
-#   demo      — prints reading order for 06_demos/ (interactive — you pick).
-#   teardown  — runs 02_teardown.sql with RUN_TEARDOWN=TRUE (requires
-#               TEARDOWN_CONFIRM=YES env var to actually fire).
+#   deploy     — run every 0.1.1 SQL file in run order (excludes teardown)
+#   seed       — re-run 01_pre_bronze/08_seed.sql only
+#   refresh    — CALL bronze_silver_gold_refresh()
+#   validate   — run every 05_validate/*.sql gate
+#   demo       — print 06_demos/ reading order (interactive)
+#   teardown   — run 02_teardown.sql with RUN_TEARDOWN=TRUE (gated)
+#   nuke       — DROP CATALOG ... CASCADE (more aggressive than teardown)
+#   query      — ad-hoc SQL: ./runbook.sh query 'SELECT current_catalog()'
 #
-# Auth: requires DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_WAREHOUSE_ID
-# in env (or .env loaded via shell). See .env.example.
-#
-# Manual flow remains primary — this script is for batch deploys, CI dry
-# runs, and 0.1.7 foundation.
+# Auth: needs DATABRICKS_HOST + DATABRICKS_TOKEN + DATABRICKS_WAREHOUSE_ID
+# in env (or .env).
 # ============================================================================
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG_ROOT="$REPO_ROOT/packages/0.1.1"
+DBX_RUN="$REPO_ROOT/scripts/dbx_run.py"
 
 # Load .env if present
 if [[ -f "$REPO_ROOT/.env" ]]; then
@@ -34,64 +33,58 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
     set +a
 fi
 
-: "${DATABRICKS_HOST:?DATABRICKS_HOST not set; cp .env.example .env and fill in}"
+: "${DATABRICKS_HOST:?DATABRICKS_HOST not set; cp .env.example .env or export from keychain}"
 : "${DATABRICKS_TOKEN:?DATABRICKS_TOKEN not set}"
 : "${DATABRICKS_WAREHOUSE_ID:?DATABRICKS_WAREHOUSE_ID not set}"
+export DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID
+
+run() { python3 "$DBX_RUN" "$@"; }
 
 # ---------------------------------------------------------------------------
-# Submit one SQL statement and poll until terminal state. Returns 0 on
-# success, non-zero on FAILED / CANCELED / TIMED_OUT.
+# Runbook order — single source of truth. Keep this list aligned with
+# packages/0.1.1/EXECUTION_CHECKLIST.md.
 # ---------------------------------------------------------------------------
-exec_sql_file() {
-    local file="$1"
-    local label
-    label="$(basename "$file")"
-    echo "▶ $label"
 
-    local sql
-    sql="$(cat "$file")"
+deploy_files=(
+    "$PKG_ROOT/00_setup/00_create_catalog.sql"
+    "$PKG_ROOT/00_setup/01_config.sql"
+    "$PKG_ROOT/01_pre_bronze/01_schemas.sql"
+    "$PKG_ROOT/01_pre_bronze/02_tables_state_street.sql"
+    "$PKG_ROOT/01_pre_bronze/03_tables_aladdin.sql"
+    "$PKG_ROOT/01_pre_bronze/04_tables_aspen.sql"
+    "$PKG_ROOT/01_pre_bronze/05_tables_efront.sql"
+    "$PKG_ROOT/01_pre_bronze/06_tables_internal_admin.sql"
+    "$PKG_ROOT/01_pre_bronze/07_tables_bloomberg.sql"
+    "$PKG_ROOT/01_pre_bronze/08_seed.sql"
+    "$PKG_ROOT/02_bronze/01_schema.sql"
+    "$PKG_ROOT/02_bronze/02_crosswalk.sql"
+    "$PKG_ROOT/02_bronze/03_tables.sql"
+    "$PKG_ROOT/02_bronze/04_views.sql"
+    "$PKG_ROOT/02_bronze/05_materialized_views.sql"
+    "$PKG_ROOT/02_bronze/06_refresh_procs.sql"
+    "$PKG_ROOT/02_bronze/07_lineage_audit.sql"
+    "$PKG_ROOT/03_silver/01_schema.sql"
+    "$PKG_ROOT/03_silver/02_tables.sql"
+    "$PKG_ROOT/03_silver/03_views.sql"
+    "$PKG_ROOT/03_silver/04_materialized_views.sql"
+    "$PKG_ROOT/03_silver/05_refresh_procs.sql"
+    "$PKG_ROOT/03_silver/06_documentation.sql"
+    "$PKG_ROOT/04_gold/01_schemas.sql"
+    "$PKG_ROOT/04_gold/02_tables.sql"
+    "$PKG_ROOT/04_gold/03_views.sql"
+    "$PKG_ROOT/04_gold/04_materialized_views.sql"
+    "$PKG_ROOT/04_gold/05_refresh_procs.sql"
+    "$PKG_ROOT/00_setup/03_refresh_orchestrator.sql"
+)
 
-    local payload
-    payload=$(jq -nR --arg s "$sql" --arg w "$DATABRICKS_WAREHOUSE_ID" \
-        '{statement: $s, warehouse_id: $w, wait_timeout: "50s", on_wait_timeout: "CONTINUE"}')
-
-    local resp
-    resp=$(curl -sS -X POST "https://$DATABRICKS_HOST/api/2.0/sql/statements" \
-        -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d "$payload")
-
-    local statement_id state
-    statement_id=$(echo "$resp" | jq -r '.statement_id')
-    state=$(echo "$resp" | jq -r '.status.state')
-
-    # Poll if not yet terminal
-    while [[ "$state" == "PENDING" || "$state" == "RUNNING" ]]; do
-        sleep 5
-        resp=$(curl -sS "https://$DATABRICKS_HOST/api/2.0/sql/statements/$statement_id" \
-            -H "Authorization: Bearer $DATABRICKS_TOKEN")
-        state=$(echo "$resp" | jq -r '.status.state')
-    done
-
-    if [[ "$state" == "SUCCEEDED" ]]; then
-        echo "  ✓ $label"
-        return 0
-    else
-        echo "  ✗ $label — state=$state" >&2
-        echo "$resp" | jq '.status.error // .' >&2
-        return 1
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Run every SQL file in a directory, sorted lexicographically.
-# ---------------------------------------------------------------------------
-exec_dir_sorted() {
-    local dir="$1"
-    while IFS= read -r f; do
-        exec_sql_file "$f"
-    done < <(find "$dir" -maxdepth 1 -name '*.sql' | sort)
-}
+validate_files=(
+    "$PKG_ROOT/05_validate/01_object_inventory.sql"
+    "$PKG_ROOT/05_validate/02_fk_integrity.sql"
+    "$PKG_ROOT/05_validate/03_view_mv_derivability.sql"
+    "$PKG_ROOT/05_validate/04_scd2_integrity.sql"
+    "$PKG_ROOT/05_validate/05_provenance_audit.sql"
+    "$PKG_ROOT/05_validate/06_refresh_smoke.sql"
+)
 
 # ---------------------------------------------------------------------------
 # Subcommands
@@ -99,47 +92,34 @@ exec_dir_sorted() {
 
 cmd_deploy() {
     echo "═══ deploy: 0.1.1 medallion runbook ═══"
-    exec_sql_file "$PKG_ROOT/00_setup/00_create_catalog.sql"
-    exec_sql_file "$PKG_ROOT/00_setup/01_config.sql"
-    exec_dir_sorted "$PKG_ROOT/01_pre_bronze"
-    exec_dir_sorted "$PKG_ROOT/02_bronze"
-    exec_dir_sorted "$PKG_ROOT/03_silver"
-    exec_dir_sorted "$PKG_ROOT/04_gold"
-    exec_sql_file "$PKG_ROOT/00_setup/03_refresh_orchestrator.sql"
-    echo "═══ deploy complete. Run \`pnpm run refresh\` to populate tables. ═══"
+    run "${deploy_files[@]}"
+    echo "═══ deploy complete. Next: \`pnpm run refresh\` to populate t_ tables. ═══"
 }
 
 cmd_seed() {
-    exec_sql_file "$PKG_ROOT/00_setup/01_config.sql"
-    exec_sql_file "$PKG_ROOT/01_pre_bronze/08_seed.sql"
+    run "$PKG_ROOT/00_setup/01_config.sql" "$PKG_ROOT/01_pre_bronze/08_seed.sql"
 }
 
 cmd_refresh() {
-    exec_sql_file "$PKG_ROOT/00_setup/01_config.sql"
-    # Inline statement — call the orchestrator
-    local tmp
-    tmp=$(mktemp)
-    cat > "$tmp" <<'EOF'
-DECLARE OR REPLACE VARIABLE catalog_name STRING DEFAULT 'medallion_demo';
+    run --inline "BEGIN
+DECLARE catalog_name STRING DEFAULT 'medallion_demo';
 EXECUTE IMMEDIATE 'USE CATALOG ' || catalog_name;
 CALL bronze_silver_gold_refresh();
-EOF
-    exec_sql_file "$tmp"
-    rm -f "$tmp"
+END;"
 }
 
 cmd_validate() {
     echo "═══ validate: running 05_validate/ gates ═══"
-    exec_sql_file "$PKG_ROOT/00_setup/01_config.sql"
-    exec_dir_sorted "$PKG_ROOT/05_validate"
+    run "${validate_files[@]}"
     echo "═══ validate complete ═══"
 }
 
 cmd_demo() {
-    echo "═══ 06_demos/ reading order ═══"
-    echo "Run each in a SQL editor (not via this script — they're pedagogical):"
-    echo
     cat <<'EOF'
+═══ 06_demos/ reading order ═══
+Run each in a SQL editor (or via `query` subcommand). Pedagogical files —
+read the docstring + result panel together.
+
   01_what_is_a_view.sql       — view = stored query
   02_what_is_an_mv.sql        — MV = view + cached results; REFRESH demo
   03_what_is_a_table.sql      — table = explicit INSERT-driven population
@@ -147,44 +127,71 @@ cmd_demo() {
   05_timing_demo.sql          — cold/warm cache + materialized comparison
   06_freshness_demo.sql       — what each artifact sees when raw mutates
   07_refresh_cost_demo.sql    — event_log() per-MV cost telemetry
-  08_concurrency_demo.sql     — multi-tab: read v while mv refreshes
+  08_concurrency_demo.sql     — solo via Delta time-travel + multi-tab option
   09_cascade_demo.sql         — Decision #13 made visible (2.5h+ → 5–10 min)
   99_adhoc_playground.sql     — open-ended analyst queries
+
+See packages/0.1.1/06_demos/README.md for the full pedagogical arc.
 EOF
-    echo
-    echo "See packages/0.1.1/06_demos/README.md for the full pedagogical arc."
 }
 
 cmd_teardown() {
     if [[ "${TEARDOWN_CONFIRM:-NO}" != "YES" ]]; then
         echo "✗ teardown blocked. Set TEARDOWN_CONFIRM=YES to actually run." >&2
-        echo "  This will drop all 15 schemas in $DATABRICKS_HOST." >&2
+        echo "  This will drop all 15 schemas in the medallion_demo catalog." >&2
         exit 2
     fi
-    local tmp
-    tmp=$(mktemp)
-    cat > "$tmp" <<'EOF'
-DECLARE OR REPLACE VARIABLE catalog_name STRING DEFAULT 'medallion_demo';
+    run --inline "BEGIN
+DECLARE catalog_name STRING DEFAULT 'medallion_demo';
 EXECUTE IMMEDIATE 'USE CATALOG ' || catalog_name;
-SET VARIABLE RUN_TEARDOWN = TRUE;
-EOF
-    cat "$PKG_ROOT/00_setup/02_teardown.sql" >> "$tmp"
-    exec_sql_file "$tmp"
-    rm -f "$tmp"
+DROP SCHEMA IF EXISTS team_pd_direct_lending     CASCADE;
+DROP SCHEMA IF EXISTS team_pd_distressed         CASCADE;
+DROP SCHEMA IF EXISTS team_pd_mezzanine          CASCADE;
+DROP SCHEMA IF EXISTS team_pd_real_estate_debt   CASCADE;
+DROP SCHEMA IF EXISTS team_pd_specialty_finance  CASCADE;
+DROP SCHEMA IF EXISTS gold_pd_consolidated       CASCADE;
+DROP SCHEMA IF EXISTS investments                CASCADE;
+DROP SCHEMA IF EXISTS investments_history        CASCADE;
+DROP SCHEMA IF EXISTS bronze                     CASCADE;
+DROP SCHEMA IF EXISTS raw_state_street           CASCADE;
+DROP SCHEMA IF EXISTS raw_aladdin                CASCADE;
+DROP SCHEMA IF EXISTS raw_aspen                  CASCADE;
+DROP SCHEMA IF EXISTS raw_efront                 CASCADE;
+DROP SCHEMA IF EXISTS raw_internal_admin         CASCADE;
+DROP SCHEMA IF EXISTS raw_bloomberg              CASCADE;
+SELECT 'teardown complete' AS status;
+END;"
+}
+
+cmd_nuke() {
+    if [[ "${NUKE_CONFIRM:-NO}" != "YES" ]]; then
+        echo "✗ nuke blocked. Set NUKE_CONFIRM=YES to actually run." >&2
+        echo "  This drops the medallion_demo catalog itself (CASCADE)." >&2
+        echo "  Re-run 00_setup/00_create_catalog.sql afterward." >&2
+        exit 2
+    fi
+    run --inline "DROP CATALOG IF EXISTS medallion_demo CASCADE"
+}
+
+cmd_query() {
+    [[ $# -eq 0 ]] && { echo "usage: $0 query 'SQL HERE'" >&2; exit 2; }
+    run --inline "$*"
 }
 
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
-case "${1:-}" in
-    deploy)   cmd_deploy ;;
-    seed)     cmd_seed ;;
-    refresh)  cmd_refresh ;;
-    validate) cmd_validate ;;
-    demo)     cmd_demo ;;
-    teardown) cmd_teardown ;;
+sub="${1:-}"; shift || true
+case "$sub" in
+    deploy)   cmd_deploy "$@" ;;
+    seed)     cmd_seed "$@" ;;
+    refresh)  cmd_refresh "$@" ;;
+    validate) cmd_validate "$@" ;;
+    demo)     cmd_demo "$@" ;;
+    teardown) cmd_teardown "$@" ;;
+    nuke)     cmd_nuke "$@" ;;
+    query)    cmd_query "$@" ;;
     *)
-        echo "Usage: $0 {deploy|seed|refresh|validate|demo|teardown}" >&2
-        exit 1
-        ;;
+        echo "Usage: $0 {deploy|seed|refresh|validate|demo|teardown|nuke|query <sql>}" >&2
+        exit 1 ;;
 esac
