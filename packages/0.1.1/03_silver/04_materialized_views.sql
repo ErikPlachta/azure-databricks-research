@@ -555,7 +555,7 @@ SELECT
     CAST(cf.amount_local * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 2)) AS income_amount_usd,
     cf.currency_code, cf.loaded_at AS bronze_loaded_at, current_timestamp() AS silver_loaded_at
 FROM cf_resolved cf
-LEFT JOIN investments.mvportfolio_dim p_dim
+JOIN investments.mvportfolio_dim p_dim
     ON p_dim.enterprise_key = cf.portfolio_enterprise_key
    AND p_dim.is_current = TRUE
 LEFT JOIN investments.mvfx_rate_dim fx

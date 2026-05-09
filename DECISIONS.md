@@ -107,3 +107,19 @@ Silver entity counts: `investments` 17 → 18 (8 SCD2 dims + fx_rate_dim + 9 fac
 3. **`CAST(p.source_key AS BIGINT)` bug** in `investments_history.vposition_cancels_fact` (silver). `source_key` is a string of the form `'SS_POS_<team>_<id>_<YYYYMMDD>'` — not numeric. Fix: `xxhash64(p.source_key)` (deterministic, stable BIGINT, satisfies `cancelled_position_sk BIGINT NOT NULL`). Other cancels facts use `CAST(NULL AS BIGINT)` for the analogous column; only the position cancel attempted a real cast. Fix applied to both `03_views.sql` and `04_materialized_views.sql`.
 
 Operational consequence for the project: deploys against Free Edition should expect multi-hour runs and benefit from background submission + idempotent retry. Both addressed in `scripts/dbx_run.py` (curl retry on transient network failures + polling that survives client-side timeouts; server-side execution continues even if the client disconnects, so re-running with `CREATE OR REPLACE` is safe).
+
+## 17. Bronze unification gap — cross-system FK source_keys not in the crosswalk
+
+**2026-05-09.** End-to-end deploy completed (53/53 gold MVs created, 23K positions seeded, all DDL idempotent), but every gold table is empty after `CALL bronze_silver_gold_refresh()`. Root cause: `bronze.vposition` calls `bronze.fn_resolve_enterprise_key('state_street', p.portfolio_source_key)` to translate a position's portfolio FK to a unified enterprise key. `portfolio_source_key` values are stable portfolio identities (e.g. `'SS_PORT_TEAM_01'`), but no source's `source_key` column equals that string. The crosswalk MERGE in `02_crosswalk.sql` only pulls `(source_system, source_key, enterprise_key)` from each raw table's primary identity columns — so the crosswalk holds entries like `('state_street', 'SS_POS_1_1_20210508', 'EK_POS_1_1_20210508')` and `('aladdin', 'AL_RISK_1_20210508', 'EK_RISK_1_20210508')`, but never `('state_street', 'SS_PORT_TEAM_01', <ek>)`. Resolution returns NULL → silver position fact has 23000 rows with all-NULL `portfolio_sk`/`business_unit_sk` → team-filter joins (`gold.team_pd_*.vposition_analytics_fact JOIN ... ON bu_code = '<team>'`) return 0 rows → gold is empty.
+
+Same gap affects every cross-system FK column in pre-bronze: `position_raw.portfolio_source_key`, `position_raw.security_source_key`, `transaction_raw.portfolio_source_key`, etc. The crosswalk only maps each row's primary identity, not the cross-source foreign keys those rows reference.
+
+Three resolution paths:
+
+1. **Augment the crosswalk MERGE** (smallest surgery, recommended). Add `UNION` arms in `02_crosswalk.sql` that pull `portfolio_source_key`+derived-canonical-EK pairs from `raw_aladdin.portfolio_risk_raw`, `security_source_key` pairs from `raw_aspen.security_master_raw`, etc. Keep the per-row identity entries; just add the cross-system FK entries alongside.
+2. **Seed change**: have every source emit consistent canonical `enterprise_key` values per logical entity (e.g. all rows referencing portfolio TEAM_01 get `enterprise_key = 'EK_PORT_TEAM_01'` regardless of source). Larger refactor; touches every raw table in `08_seed.sql`.
+3. **Bronze view rewrite**: change `bronze.vposition` to JOIN directly to `raw_aladdin.portfolio_risk_raw` on `portfolio_source_key` for portfolio enterprise_key resolution. Hacky and source-specific; doesn't generalize.
+
+Option 1 is the smallest fix and closest to the intended design. Tracked in plan p01_live_deploy_and_helper as the next phase. Until resolved, `05_validate/02_fk_integrity.sql` will flag this (`orphan_position_portfolio_sks > 0`) and gold tables stay empty.
+
+Validation: `bronze.fn_resolve_enterprise_key` works correctly when given a key actually in the crosswalk (e.g. `'SS_POS_10_10_20210508'` → `'EK_POS_10_10_20210508'`); the bug is in WHAT the crosswalk contains, not the resolver.

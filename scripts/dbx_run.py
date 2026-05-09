@@ -68,7 +68,7 @@ def wrap_compound(sql):
 # ---------------------------------------------------------------------------
 
 
-def api(method, path, body=None, retries=4, retry_sleep=5.0):
+def api(method, path, body=None, retries=12, retry_sleep=5.0):
     """Call Databricks API via curl. Retries on transient network errors.
 
     curl exit codes worth retrying:
@@ -78,6 +78,9 @@ def api(method, path, body=None, retries=4, retry_sleep=5.0):
       35 — SSL handshake / TLS recv failure
       52 — empty reply
       56 — failure receiving network data
+
+    With 12 retries and linear-attempt backoff (5s, 10s, ..., 60s = ~6.5 min
+    total budget per call), survives multi-minute network outages.
     """
     transient = {6, 7, 28, 35, 52, 56}
     url = f"{HOST}{path}"

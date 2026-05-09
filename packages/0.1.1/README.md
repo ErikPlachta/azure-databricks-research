@@ -4,11 +4,11 @@
 
 ## What changed from 0.1.0
 
-| Change | Why |
-| ------ | --- |
-| Silver schema split: `investments` (18 current) + `investments_history` (6: monthend/cancels/bridge) | Free Edition caps schemas at 100 objects. 0.1.0's `investments` hit the cap. Split mirrors user's enterprise `investments` + `investments_historical` pattern. |
-| Cascading MV references (silver mv → bronze mv, gold mv → silver mv) | 0.1.0's gold MV materialization took 2.5+ hours because gold mv bodies referenced silver views (full re-cascade). New pattern: mv reads from already-materialized upstream mv. Drops to ~5–10 min total. |
-| Byte-equality contract relaxed | v* and mv* SELECT projections still mechanically derivable (`s/v/mv/g` substitution at upstream refs). `v*` references upstream `v*` (slow path = production reality). `mv*` references upstream `mv*` (fast cascading path = MV value-add). |
+| Change                                                                                               | Why                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Silver schema split: `investments` (18 current) + `investments_history` (6: monthend/cancels/bridge) | Free Edition caps schemas at 100 objects. 0.1.0's `investments` hit the cap. Split mirrors user's enterprise `investments` + `investments_historical` pattern.                                                                               |
+| Cascading MV references (silver mv → bronze mv, gold mv → silver mv)                                 | 0.1.0's gold MV materialization took 2.5+ hours because gold mv bodies referenced silver views (full re-cascade). New pattern: mv reads from already-materialized upstream mv. Drops to ~5–10 min total.                                     |
+| Byte-equality contract relaxed                                                                       | v* and mv* SELECT projections still mechanically derivable (`s/v/mv/g` substitution at upstream refs). `v*` references upstream `v*` (slow path = production reality). `mv*` references upstream `mv*` (fast cascading path = MV value-add). |
 
 ## Prereq — create the catalog (one-time)
 
@@ -150,7 +150,10 @@ SET VARIABLE seed_positions_per_team_per_year = 10000;
 SET VARIABLE seed_txns_per_security_per_year  = 20;
 ```
 
-Free Edition limits (per [MS Learn](https://learn.microsoft.com/en-us/azure/databricks/getting-started/free-edition-limitations)): one workspace, one metastore (catalogs OK), serverless compute only, 2X-Small SQL warehouse, daily quota.
+- [Sign Up for Free Edition | MS Learn](https://learn.microsoft.com/en-us/azure/databricks/getting-started/free-edition)
+- [Free Edition Limits | MS Learn](https://learn.microsoft.com/en-us/azure/databricks/getting-started/free-edition-limitations))
+  - One workspace, one metastore (catalogs OK), serverless compute only, 2X-Small SQL warehouse, daily quota.
+- [Free Sign-Up | Databricks](https://login.databricks.com/?dbx_source=docs&intent=CE_SIGN_UP)
 
 ## Teardown
 

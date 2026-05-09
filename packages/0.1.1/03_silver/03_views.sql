@@ -877,7 +877,7 @@ SELECT
     cf.loaded_at                                 AS bronze_loaded_at,
     current_timestamp()                          AS silver_loaded_at
 FROM cf_resolved cf
-LEFT JOIN investments.vportfolio_dim p_dim
+JOIN investments.vportfolio_dim p_dim
     ON p_dim.enterprise_key = cf.portfolio_enterprise_key
    AND p_dim.is_current = TRUE
 LEFT JOIN investments.vfx_rate_dim fx
