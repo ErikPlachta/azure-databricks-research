@@ -34,7 +34,7 @@
 --       customizations from 01_config.sql).
 DECLARE OR REPLACE VARIABLE catalog_name STRING DEFAULT 'medallion_demo';
 
-DECLARE OR REPLACE VARIABLE position_start_date DATE    DEFAULT date_sub(current_date(), 365 * 5);
+DECLARE OR REPLACE VARIABLE position_start_date DATE    DEFAULT date_sub(current_date(), 365);  -- 1y default; was 365 * 5
 DECLARE OR REPLACE VARIABLE position_end_date   DATE    DEFAULT current_date();
 DECLARE OR REPLACE VARIABLE simulate_history    BOOLEAN DEFAULT TRUE;
 DECLARE OR REPLACE VARIABLE skip_positions      BOOLEAN DEFAULT FALSE;

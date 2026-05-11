@@ -108,7 +108,7 @@ Silver entity counts: `investments` 17 → 18 (8 SCD2 dims + fx_rate_dim + 9 fac
 
 Operational consequence for the project: deploys against Free Edition should expect multi-hour runs and benefit from background submission + idempotent retry. Both addressed in `scripts/dbx_run.py` (curl retry on transient network failures + polling that survives client-side timeouts; server-side execution continues even if the client disconnects, so re-running with `CREATE OR REPLACE` is safe).
 
-## 17. Bronze unification gap — cross-system FK source_keys not in the crosswalk
+## 17. Bronze unification gap — cross-system FK source_keys not in the crosswalk (closed via crosswalk augmentation)
 
 **2026-05-09.** End-to-end deploy completed (53/53 gold MVs created, 23K positions seeded, all DDL idempotent), but every gold table is empty after `CALL bronze_silver_gold_refresh()`. Root cause: `bronze.vposition` calls `bronze.fn_resolve_enterprise_key('state_street', p.portfolio_source_key)` to translate a position's portfolio FK to a unified enterprise key. `portfolio_source_key` values are stable portfolio identities (e.g. `'SS_PORT_TEAM_01'`), but no source's `source_key` column equals that string. The crosswalk MERGE in `02_crosswalk.sql` only pulls `(source_system, source_key, enterprise_key)` from each raw table's primary identity columns — so the crosswalk holds entries like `('state_street', 'SS_POS_1_1_20210508', 'EK_POS_1_1_20210508')` and `('aladdin', 'AL_RISK_1_20210508', 'EK_RISK_1_20210508')`, but never `('state_street', 'SS_PORT_TEAM_01', <ek>)`. Resolution returns NULL → silver position fact has 23000 rows with all-NULL `portfolio_sk`/`business_unit_sk` → team-filter joins (`gold.team_pd_*.vposition_analytics_fact JOIN ... ON bu_code = '<team>'`) return 0 rows → gold is empty.
 
@@ -123,3 +123,42 @@ Three resolution paths:
 Option 1 is the smallest fix and closest to the intended design. Tracked in plan p01_live_deploy_and_helper as the next phase. Until resolved, `05_validate/02_fk_integrity.sql` will flag this (`orphan_position_portfolio_sks > 0`) and gold tables stay empty.
 
 Validation: `bronze.fn_resolve_enterprise_key` works correctly when given a key actually in the crosswalk (e.g. `'SS_POS_10_10_20210508'` → `'EK_POS_10_10_20210508'`); the bug is in WHAT the crosswalk contains, not the resolver.
+
+**2026-05-09 — closed via Option 1 (crosswalk augmentation + canonical portfolio EK).** Two coordinated changes:
+
+1. `02_bronze/02_crosswalk.sql` MERGE source extended with cross-system FK union arms: every `portfolio_source_key` value in `raw_state_street.{position,transaction,cash_flow,nav}_raw` and `raw_aladdin.portfolio_risk_raw` gets a crosswalk row keyed `('state_street', 'SS_PORT_TEAM_NN', 'EK_PORT_TEAM_NN')` (and the same EK from the aladdin arm), where the canonical EK is derived as `'EK_' || substr(portfolio_source_key, 4)`. Roughly 50 new rows for 10 portfolios × 5 referencing tables; idempotent via `WHEN NOT MATCHED`.
+
+2. Silver `vportfolio_dim` (and cascading `mvportfolio_dim`) now derive `enterprise_key` via the same `'EK_' || substr(r.portfolio_source_key, 4)` formula, replacing the per-row date-suffixed aladdin enterprise_key. So the join chain agrees: bronze's `fn_resolve_enterprise_key` returns `'EK_PORT_TEAM_01'` and the silver dim has rows keyed by exactly that string.
+
+`vsecurity_dim` not touched — `raw_aspen.security_master_raw.source_key` already serves as the stable canonical security identity (3332 aspen entries in the crosswalk via the existing primary-source_key arm), so the cross-system reference from `raw_state_street.position_raw.security_source_key` resolves cleanly.
+
+Acceptance check (post-redeploy): `bronze.vposition` has 0 NULL `portfolio_enterprise_key`; silver `t_vposition_analytics_fact.portfolio_sk` has 0 NULL; team gold tables non-empty.
+
+**Verified live 2026-05-11:** All checks above pass against the actual workspace. `t_vposition_analytics_fact` has 0 NULL `portfolio_sk` and 0 NULL `business_unit_sk` (4999 of 4999 resolved). Team gold tables 351–533 each; `gold_pd_consolidated.t_vpd_position_book` = 2301 = exact sum of 5 teams.
+
+## 18. Silver `vsecurity_master_fact` — Spark INSERT-OVERWRITE attribute-ID collision (worked around)
+
+**2026-05-11.** During the clean-redeploy under DECISIONS #17, the orchestrator's silver-fact refresh chain failed at `investments.refresh_security_master_fact()` with `Cannot find column index for attribute 'bronze_loaded_at#NNNNN'` even though the column name appears in the map. The view body:
+
+```sql
+SELECT ..., s.bronze_loaded_at, ...
+FROM investments.vsecurity_dim s
+LEFT JOIN bronze.vsecurity bs ON bs.enterprise_key = s.enterprise_key
+LEFT JOIN investments.vfx_rate_dim fx ON ...
+```
+
+Both `s` (silver dim) and `bs` (bronze view) expose `bronze_loaded_at` columns. The SELECT explicitly qualifies `s.bronze_loaded_at`, so semantically there's no ambiguity — but Spark's plan optimizer for `INSERT OVERWRITE` tracks both columns by internal attribute ID and fails to resolve which is which at the target table's `bronze_loaded_at` column. SELECT-only queries from the view work fine; the failure is specific to INSERT OVERWRITE.
+
+Attempts that did NOT fix it:
+- Restructuring the LEFT JOIN to a subquery that drops `bs.bronze_loaded_at`.
+- Wrapping the body in a CTE so the outer SELECT references only resolved aliases.
+- Renaming `s.bronze_loaded_at` to `s_bronze_loaded_at` in the CTE and back at the outer level.
+- DROP + CREATE OR REPLACE on both view and proc.
+- DROP + CREATE OR REPLACE on the target table.
+- Cycling the warehouse to clear Spark plan caches.
+
+Working workaround: remove the bronze.vsecurity LEFT JOIN entirely from `vsecurity_master_fact` and project `bronze_loaded_at` as `CAST(NULL AS TIMESTAMP)`. The `latest_close_price_local`/`latest_close_price_usd` columns become NULL too — they were only enrichment; the same price data is available via `vsecurity_price_fact`. Audit timestamp recoverable via `security_sk` join back to `vsecurity_dim`.
+
+Same workaround applied to the cascading `mvsecurity_master_fact`.
+
+Open: this looks like a real Spark/Databricks runtime bug, not a SQL author error. The pattern (view layered over another view, both aliasing the same underlying `loaded_at` column, INSERT OVERWRITE consuming the outer view) reproduces deterministically. Worth filing with Databricks if we keep hitting it. For now we ship the workaround and document the trade-off.

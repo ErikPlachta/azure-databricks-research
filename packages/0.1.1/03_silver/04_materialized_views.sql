@@ -87,7 +87,10 @@ FROM ordered o;
 -- 4.4 mvportfolio_dim ----------------------------------------------------------
 CREATE OR REPLACE MATERIALIZED VIEW investments.mvportfolio_dim AS
 WITH portfolios AS (
-    SELECT r.portfolio_source_key, r.enterprise_key, r.portfolio_name, r.strategy_name, r.loaded_at,
+    -- DECISIONS #17: canonical EK derived from portfolio_source_key (matches bronze crosswalk).
+    SELECT r.portfolio_source_key,
+        'EK_' || substr(r.portfolio_source_key, 4) AS enterprise_key,
+        r.portfolio_name, r.strategy_name, r.loaded_at,
         ROW_NUMBER() OVER (PARTITION BY r.portfolio_source_key ORDER BY r.risk_date DESC, r.loaded_at DESC) AS _rn
     FROM raw_aladdin.portfolio_risk_raw r
 ),
@@ -242,21 +245,20 @@ SELECT
 FROM monthends;
 
 -- 4.12 mvsecurity_master_fact --------------------------------------------------
+-- Mirrors vsecurity_master_fact: dropped bronze.mvsecurity LEFT JOIN (Spark planner bug); literal NULL for bronze_loaded_at.
 CREATE OR REPLACE MATERIALIZED VIEW investments.mvsecurity_master_fact AS
 SELECT
     ROW_NUMBER() OVER (ORDER BY s.enterprise_key) AS security_master_sk,
     current_date() AS snapshot_date, s.security_sk, s.enterprise_key, s.security_name,
     s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date, s.coupon_rate, s.currency_code,
     s.issuer_enterprise_key,
-    bs.latest_close_price AS latest_close_price_local,
-    CAST(bs.latest_close_price * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 6)) AS latest_close_price_usd,
+    CAST(NULL AS DECIMAL(18, 6)) AS latest_close_price_local,
+    CAST(NULL AS DECIMAL(18, 6)) AS latest_close_price_usd,
     datediff(s.maturity_date, current_date()) AS days_to_maturity,
     (s.maturity_date < current_date()) AS is_matured,
-    s.bronze_loaded_at, current_timestamp() AS silver_loaded_at
+    CAST(NULL AS TIMESTAMP) AS bronze_loaded_at,
+    current_timestamp() AS silver_loaded_at
 FROM investments.mvsecurity_dim s
-LEFT JOIN bronze.mvsecurity bs ON bs.enterprise_key = s.enterprise_key
-LEFT JOIN investments.mvfx_rate_dim fx
-    ON fx.from_currency = bs.latest_close_price_currency AND fx.to_currency = 'USD' AND fx.rate_date = bs.latest_price_date
 WHERE s.is_current = TRUE;
 
 -- 4.13 mvsecurity_price_fact ---------------------------------------------------

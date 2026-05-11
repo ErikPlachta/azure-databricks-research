@@ -142,9 +142,14 @@ FROM ordered o;
 CREATE OR REPLACE VIEW investments.vportfolio_dim AS
 WITH portfolios AS (
     -- Aladdin lacks a portfolio_master; we derive from latest portfolio_risk row.
+    -- DECISIONS #17: enterprise_key derived canonically from portfolio_source_key
+    -- ('SS_PORT_TEAM_01' → 'EK_PORT_TEAM_01') so it matches the bronze
+    -- crosswalk's cross-system FK entries. The aladdin r.enterprise_key is
+    -- per-row date-suffixed (`EK_RISK_<date>`) and not usable as a stable
+    -- portfolio identity.
     SELECT
         r.portfolio_source_key,
-        r.enterprise_key,
+        'EK_' || substr(r.portfolio_source_key, 4) AS enterprise_key,
         r.portfolio_name,
         r.strategy_name,
         r.loaded_at,
@@ -415,6 +420,11 @@ SELECT
 FROM monthends;
 
 -- 3.12 vsecurity_master_fact ---------------------------------------------------
+-- Note: dropped LEFT JOIN bronze.vsecurity here because Spark's INSERT OVERWRITE
+-- optimizer tripped on attribute-ID collisions even after multiple rewrites
+-- (CTE, projection aliasing, target-table drop+recreate). The latest_close_price
+-- enrichment is duplicated in vsecurity_price_fact, so dropping it here is a
+-- net wash — security_master_fact just becomes a thinner SCD2-flat view.
 CREATE OR REPLACE VIEW investments.vsecurity_master_fact AS
 SELECT
     ROW_NUMBER() OVER (ORDER BY s.enterprise_key) AS security_master_sk,
@@ -429,18 +439,13 @@ SELECT
     s.coupon_rate,
     s.currency_code,
     s.issuer_enterprise_key,
-    bs.latest_close_price                                                      AS latest_close_price_local,
-    CAST(bs.latest_close_price * COALESCE(fx.fx_rate, 1.0) AS DECIMAL(18, 6))  AS latest_close_price_usd,
-    datediff(s.maturity_date, current_date())                                  AS days_to_maturity,
-    (s.maturity_date < current_date())                                         AS is_matured,
-    s.bronze_loaded_at,
+    CAST(NULL AS DECIMAL(18, 6)) AS latest_close_price_local,
+    CAST(NULL AS DECIMAL(18, 6)) AS latest_close_price_usd,
+    datediff(s.maturity_date, current_date()) AS days_to_maturity,
+    (s.maturity_date < current_date()) AS is_matured,
+    CAST(NULL AS TIMESTAMP) AS bronze_loaded_at,  -- Spark planner trips on s.bronze_loaded_at reference; literal NULL is a clean workaround. The audit value is in vsecurity_dim and recoverable via the security_sk join.
     current_timestamp() AS silver_loaded_at
 FROM investments.vsecurity_dim s
-LEFT JOIN bronze.vsecurity bs ON bs.enterprise_key = s.enterprise_key
-LEFT JOIN investments.vfx_rate_dim fx
-    ON fx.from_currency = bs.latest_close_price_currency
-   AND fx.to_currency   = 'USD'
-   AND fx.rate_date     = bs.latest_price_date
 WHERE s.is_current = TRUE;
 
 -- 3.13 vsecurity_price_fact ----------------------------------------------------

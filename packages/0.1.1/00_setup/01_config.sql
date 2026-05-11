@@ -17,9 +17,10 @@
 DECLARE OR REPLACE VARIABLE catalog_name STRING DEFAULT 'medallion_demo';
 
 -- ----------------------------------------------------------------------------
--- Position window (5y default; 20y on paid)
+-- Position window (1y default for Free Edition fast iteration; was 5y).
+-- Override for paid/scale runs:  SET VARIABLE position_start_date = date_sub(current_date(), 365 * 5);
 -- ----------------------------------------------------------------------------
-DECLARE OR REPLACE VARIABLE position_start_date DATE    DEFAULT date_sub(current_date(), 365 * 5);
+DECLARE OR REPLACE VARIABLE position_start_date DATE    DEFAULT date_sub(current_date(), 365);
 DECLARE OR REPLACE VARIABLE position_end_date   DATE    DEFAULT current_date();
 DECLARE OR REPLACE VARIABLE simulate_history    BOOLEAN DEFAULT TRUE;
 DECLARE OR REPLACE VARIABLE skip_positions      BOOLEAN DEFAULT FALSE;

@@ -107,6 +107,27 @@ USING (
     UNION SELECT 'internal_admin', source_key, enterprise_key FROM raw_internal_admin.business_unit_membership_raw
     UNION SELECT 'internal_admin', source_key, enterprise_key FROM raw_internal_admin.employee_raw
     UNION SELECT 'bloomberg',      source_key, enterprise_key FROM raw_bloomberg.fx_rate_raw
+    -- ----------------------------------------------------------------------
+    -- Cross-system FK arms (DECISIONS #17): the rows above only register each
+    -- raw row's PRIMARY identity. But position/transaction/cash_flow/nav rows
+    -- carry FK columns (portfolio_source_key, etc.) that reference an entity
+    -- defined elsewhere — and no source emits those FK strings as their own
+    -- source_key. Without these arms, fn_resolve_enterprise_key returns NULL
+    -- for every position's portfolio FK lookup. Canonical EK derivation:
+    --   'EK_' || substr('SS_PORT_TEAM_01', 4) → 'EK_PORT_TEAM_01'
+    -- Same canonical EK is used by silver vportfolio_dim so the join chain
+    -- from bronze through silver agrees on portfolio identity.
+    -- ----------------------------------------------------------------------
+    UNION SELECT DISTINCT 'state_street', portfolio_source_key, 'EK_' || substr(portfolio_source_key, 4)
+        FROM raw_state_street.position_raw     WHERE portfolio_source_key IS NOT NULL
+    UNION SELECT DISTINCT 'state_street', portfolio_source_key, 'EK_' || substr(portfolio_source_key, 4)
+        FROM raw_state_street.transaction_raw  WHERE portfolio_source_key IS NOT NULL
+    UNION SELECT DISTINCT 'state_street', portfolio_source_key, 'EK_' || substr(portfolio_source_key, 4)
+        FROM raw_state_street.cash_flow_raw    WHERE portfolio_source_key IS NOT NULL
+    UNION SELECT DISTINCT 'state_street', portfolio_source_key, 'EK_' || substr(portfolio_source_key, 4)
+        FROM raw_state_street.nav_raw          WHERE portfolio_source_key IS NOT NULL
+    UNION SELECT DISTINCT 'aladdin',      portfolio_source_key, 'EK_' || substr(portfolio_source_key, 4)
+        FROM raw_aladdin.portfolio_risk_raw    WHERE portfolio_source_key IS NOT NULL
 ) s
 ON t.source_system = s.source_system AND t.source_key = s.source_key
 WHEN NOT MATCHED THEN
