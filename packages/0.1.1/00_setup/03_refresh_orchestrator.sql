@@ -50,6 +50,11 @@ AS BEGIN
     CALL team_pd_mezzanine.refresh_all();
     CALL team_pd_real_estate_debt.refresh_all();
     CALL team_pd_specialty_finance.refresh_all();
+    CALL team_re_core.refresh_all();
+    CALL team_re_value_add.refresh_all();
+    CALL team_pe_buyout.refresh_all();
+    CALL team_infra.refresh_all();
+    CALL team_public_equity.refresh_all();
     CALL gold_pd_consolidated.refresh_all();
     SET done_at = current_timestamp();
 

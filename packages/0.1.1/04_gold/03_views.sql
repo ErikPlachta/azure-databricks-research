@@ -476,6 +476,457 @@ FROM investments.vtransactions_collateral_positions_fact cp
 WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_pd_specialty_finance.vcontract_details_fact);
 
 -- ============================================================================
+-- team_re_core (0.1.2 — non-PD team, mirrors team_pd_distressed shape)
+-- ============================================================================
+CREATE OR REPLACE VIEW team_re_core.vposition_analytics_fact AS
+WITH team_positions AS (
+    SELECT p.* FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_core'
+)
+SELECT position_sk, enterprise_key, position_date, portfolio_sk, security_sk, business_unit_sk,
+    quantity, market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    market_value_usd / NULLIF(SUM(market_value_usd) OVER (PARTITION BY position_date), 0) AS concentration_pct,
+    CAST(DENSE_RANK() OVER (PARTITION BY position_date ORDER BY market_value_usd DESC) AS INT) AS portfolio_rank,
+    currency_code, silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM team_positions;
+
+CREATE OR REPLACE VIEW team_re_core.vcontract_details_fact AS
+SELECT c.contract_details_sk, c.enterprise_key, c.detail_date, c.contract_sk, c.entity_sk,
+    c.contract_type, c.principal_usd, c.coupon_rate, c.spread_over_benchmark,
+    c.days_to_maturity, c.status, c.has_active_breach,
+    YEAR(cd.signing_date) AS vintage_year,
+    c.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_details_fact c
+LEFT JOIN investments.vcontract_dim cd ON cd.contract_sk = c.contract_sk AND cd.is_current = TRUE
+WHERE c.contract_sk IN (
+    SELECT DISTINCT cp.contract_sk FROM investments.vtransactions_collateral_positions_fact cp
+    JOIN investments.vposition_analytics_fact p ON p.security_sk = cp.security_sk
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_core'
+);
+
+CREATE OR REPLACE VIEW team_re_core.vcontract_summary_fact AS
+SELECT cs.contract_summary_sk, cs.enterprise_key, cs.summary_date, cs.contract_sk,
+    cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+    cs.performance_status, cs.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_summary_fact cs
+WHERE cs.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_core.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_re_core.vportfolio_analytics_fact AS
+SELECT pa.portfolio_analytics_sk, pa.analytics_date, pa.portfolio_sk, pa.business_unit_sk,
+    pa.var_95, pa.var_99, pa.expected_shortfall, pa.period_return_pct, pa.ytd_return_pct,
+    pa.benchmark_return_pct, pa.benchmark_code, pa.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.vportfolio_analytics_fact pa
+JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = pa.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_core';
+
+CREATE OR REPLACE VIEW team_re_core.vsecurity_dim AS
+WITH team_secs AS (
+    SELECT DISTINCT p.security_sk FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_core'
+)
+SELECT s.security_sk, s.enterprise_key, s.effective_start_date, s.effective_end_date, s.is_current,
+    s.security_name, s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date,
+    s.coupon_rate, s.currency_code, s.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_dim s JOIN team_secs ts ON ts.security_sk = s.security_sk;
+
+CREATE OR REPLACE VIEW team_re_core.vsecurity_master_fact AS
+SELECT m.security_master_sk, m.snapshot_date, m.security_sk, m.enterprise_key, m.security_name,
+    m.asset_class, m.latest_close_price_usd, m.days_to_maturity, m.is_matured,
+    m.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_master_fact m
+WHERE m.security_sk IN (SELECT security_sk FROM team_re_core.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_core.vsecurity_price_fact AS
+SELECT sp.security_price_sk, sp.enterprise_key, sp.price_date, sp.security_sk,
+    sp.close_price_usd, sp.currency_code, sp.price_type,
+    sp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_price_fact sp
+WHERE sp.security_sk IN (SELECT security_sk FROM team_re_core.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_core.vsecurity_rating_dim AS
+SELECT sr.security_rating_sk, sr.enterprise_key, sr.effective_start_date, sr.effective_end_date,
+    sr.is_current, sr.security_enterprise_key, sr.rating_agency, sr.rating_value,
+    sr.rating_outlook, sr.rating_numeric_score,
+    sr.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_rating_dim sr
+WHERE sr.security_enterprise_key IN (SELECT enterprise_key FROM team_re_core.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_core.vtransactions_collateral_exposure_fact AS
+SELECT ce.collateral_exposure_sk, ce.enterprise_key, ce.exposure_date, ce.contract_sk,
+    ce.exposure_amount_usd, ce.collateral_value_usd, ce.collateral_type, ce.ltv_pct,
+    ce.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_exposure_fact ce
+WHERE ce.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_core.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_re_core.vtransactions_collateral_positions_fact AS
+SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contract_sk,
+    cp.security_sk, cp.position_value_usd, cp.collateral_role,
+    cp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_positions_fact cp
+WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_core.vcontract_details_fact);
+
+-- ============================================================================
+-- team_re_value_add (0.1.2 — non-PD team, mirrors team_pd_distressed shape)
+-- ============================================================================
+CREATE OR REPLACE VIEW team_re_value_add.vposition_analytics_fact AS
+WITH team_positions AS (
+    SELECT p.* FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_value_add'
+)
+SELECT position_sk, enterprise_key, position_date, portfolio_sk, security_sk, business_unit_sk,
+    quantity, market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    market_value_usd / NULLIF(SUM(market_value_usd) OVER (PARTITION BY position_date), 0) AS concentration_pct,
+    CAST(DENSE_RANK() OVER (PARTITION BY position_date ORDER BY market_value_usd DESC) AS INT) AS portfolio_rank,
+    currency_code, silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM team_positions;
+
+CREATE OR REPLACE VIEW team_re_value_add.vcontract_details_fact AS
+SELECT c.contract_details_sk, c.enterprise_key, c.detail_date, c.contract_sk, c.entity_sk,
+    c.contract_type, c.principal_usd, c.coupon_rate, c.spread_over_benchmark,
+    c.days_to_maturity, c.status, c.has_active_breach,
+    YEAR(cd.signing_date) AS vintage_year,
+    c.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_details_fact c
+LEFT JOIN investments.vcontract_dim cd ON cd.contract_sk = c.contract_sk AND cd.is_current = TRUE
+WHERE c.contract_sk IN (
+    SELECT DISTINCT cp.contract_sk FROM investments.vtransactions_collateral_positions_fact cp
+    JOIN investments.vposition_analytics_fact p ON p.security_sk = cp.security_sk
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_value_add'
+);
+
+CREATE OR REPLACE VIEW team_re_value_add.vcontract_summary_fact AS
+SELECT cs.contract_summary_sk, cs.enterprise_key, cs.summary_date, cs.contract_sk,
+    cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+    cs.performance_status, cs.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_summary_fact cs
+WHERE cs.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_value_add.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_re_value_add.vportfolio_analytics_fact AS
+SELECT pa.portfolio_analytics_sk, pa.analytics_date, pa.portfolio_sk, pa.business_unit_sk,
+    pa.var_95, pa.var_99, pa.expected_shortfall, pa.period_return_pct, pa.ytd_return_pct,
+    pa.benchmark_return_pct, pa.benchmark_code, pa.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.vportfolio_analytics_fact pa
+JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = pa.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_value_add';
+
+CREATE OR REPLACE VIEW team_re_value_add.vsecurity_dim AS
+WITH team_secs AS (
+    SELECT DISTINCT p.security_sk FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_re_value_add'
+)
+SELECT s.security_sk, s.enterprise_key, s.effective_start_date, s.effective_end_date, s.is_current,
+    s.security_name, s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date,
+    s.coupon_rate, s.currency_code, s.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_dim s JOIN team_secs ts ON ts.security_sk = s.security_sk;
+
+CREATE OR REPLACE VIEW team_re_value_add.vsecurity_master_fact AS
+SELECT m.security_master_sk, m.snapshot_date, m.security_sk, m.enterprise_key, m.security_name,
+    m.asset_class, m.latest_close_price_usd, m.days_to_maturity, m.is_matured,
+    m.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_master_fact m
+WHERE m.security_sk IN (SELECT security_sk FROM team_re_value_add.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_value_add.vsecurity_price_fact AS
+SELECT sp.security_price_sk, sp.enterprise_key, sp.price_date, sp.security_sk,
+    sp.close_price_usd, sp.currency_code, sp.price_type,
+    sp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_price_fact sp
+WHERE sp.security_sk IN (SELECT security_sk FROM team_re_value_add.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_value_add.vsecurity_rating_dim AS
+SELECT sr.security_rating_sk, sr.enterprise_key, sr.effective_start_date, sr.effective_end_date,
+    sr.is_current, sr.security_enterprise_key, sr.rating_agency, sr.rating_value,
+    sr.rating_outlook, sr.rating_numeric_score,
+    sr.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_rating_dim sr
+WHERE sr.security_enterprise_key IN (SELECT enterprise_key FROM team_re_value_add.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_re_value_add.vtransactions_collateral_exposure_fact AS
+SELECT ce.collateral_exposure_sk, ce.enterprise_key, ce.exposure_date, ce.contract_sk,
+    ce.exposure_amount_usd, ce.collateral_value_usd, ce.collateral_type, ce.ltv_pct,
+    ce.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_exposure_fact ce
+WHERE ce.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_value_add.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_re_value_add.vtransactions_collateral_positions_fact AS
+SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contract_sk,
+    cp.security_sk, cp.position_value_usd, cp.collateral_role,
+    cp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_positions_fact cp
+WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_re_value_add.vcontract_details_fact);
+
+-- ============================================================================
+-- team_pe_buyout (0.1.2 — non-PD team, mirrors team_pd_distressed shape)
+-- ============================================================================
+CREATE OR REPLACE VIEW team_pe_buyout.vposition_analytics_fact AS
+WITH team_positions AS (
+    SELECT p.* FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_pe_buyout'
+)
+SELECT position_sk, enterprise_key, position_date, portfolio_sk, security_sk, business_unit_sk,
+    quantity, market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    market_value_usd / NULLIF(SUM(market_value_usd) OVER (PARTITION BY position_date), 0) AS concentration_pct,
+    CAST(DENSE_RANK() OVER (PARTITION BY position_date ORDER BY market_value_usd DESC) AS INT) AS portfolio_rank,
+    currency_code, silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM team_positions;
+
+CREATE OR REPLACE VIEW team_pe_buyout.vcontract_details_fact AS
+SELECT c.contract_details_sk, c.enterprise_key, c.detail_date, c.contract_sk, c.entity_sk,
+    c.contract_type, c.principal_usd, c.coupon_rate, c.spread_over_benchmark,
+    c.days_to_maturity, c.status, c.has_active_breach,
+    YEAR(cd.signing_date) AS vintage_year,
+    c.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_details_fact c
+LEFT JOIN investments.vcontract_dim cd ON cd.contract_sk = c.contract_sk AND cd.is_current = TRUE
+WHERE c.contract_sk IN (
+    SELECT DISTINCT cp.contract_sk FROM investments.vtransactions_collateral_positions_fact cp
+    JOIN investments.vposition_analytics_fact p ON p.security_sk = cp.security_sk
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_pe_buyout'
+);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vcontract_summary_fact AS
+SELECT cs.contract_summary_sk, cs.enterprise_key, cs.summary_date, cs.contract_sk,
+    cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+    cs.performance_status, cs.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_summary_fact cs
+WHERE cs.contract_sk IN (SELECT DISTINCT contract_sk FROM team_pe_buyout.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vportfolio_analytics_fact AS
+SELECT pa.portfolio_analytics_sk, pa.analytics_date, pa.portfolio_sk, pa.business_unit_sk,
+    pa.var_95, pa.var_99, pa.expected_shortfall, pa.period_return_pct, pa.ytd_return_pct,
+    pa.benchmark_return_pct, pa.benchmark_code, pa.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.vportfolio_analytics_fact pa
+JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = pa.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_pe_buyout';
+
+CREATE OR REPLACE VIEW team_pe_buyout.vsecurity_dim AS
+WITH team_secs AS (
+    SELECT DISTINCT p.security_sk FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_pe_buyout'
+)
+SELECT s.security_sk, s.enterprise_key, s.effective_start_date, s.effective_end_date, s.is_current,
+    s.security_name, s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date,
+    s.coupon_rate, s.currency_code, s.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_dim s JOIN team_secs ts ON ts.security_sk = s.security_sk;
+
+CREATE OR REPLACE VIEW team_pe_buyout.vsecurity_master_fact AS
+SELECT m.security_master_sk, m.snapshot_date, m.security_sk, m.enterprise_key, m.security_name,
+    m.asset_class, m.latest_close_price_usd, m.days_to_maturity, m.is_matured,
+    m.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_master_fact m
+WHERE m.security_sk IN (SELECT security_sk FROM team_pe_buyout.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vsecurity_price_fact AS
+SELECT sp.security_price_sk, sp.enterprise_key, sp.price_date, sp.security_sk,
+    sp.close_price_usd, sp.currency_code, sp.price_type,
+    sp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_price_fact sp
+WHERE sp.security_sk IN (SELECT security_sk FROM team_pe_buyout.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vsecurity_rating_dim AS
+SELECT sr.security_rating_sk, sr.enterprise_key, sr.effective_start_date, sr.effective_end_date,
+    sr.is_current, sr.security_enterprise_key, sr.rating_agency, sr.rating_value,
+    sr.rating_outlook, sr.rating_numeric_score,
+    sr.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_rating_dim sr
+WHERE sr.security_enterprise_key IN (SELECT enterprise_key FROM team_pe_buyout.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vtransactions_collateral_exposure_fact AS
+SELECT ce.collateral_exposure_sk, ce.enterprise_key, ce.exposure_date, ce.contract_sk,
+    ce.exposure_amount_usd, ce.collateral_value_usd, ce.collateral_type, ce.ltv_pct,
+    ce.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_exposure_fact ce
+WHERE ce.contract_sk IN (SELECT DISTINCT contract_sk FROM team_pe_buyout.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_pe_buyout.vtransactions_collateral_positions_fact AS
+SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contract_sk,
+    cp.security_sk, cp.position_value_usd, cp.collateral_role,
+    cp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_positions_fact cp
+WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_pe_buyout.vcontract_details_fact);
+
+-- ============================================================================
+-- team_infra (0.1.2 — non-PD team, mirrors team_pd_distressed shape)
+-- ============================================================================
+CREATE OR REPLACE VIEW team_infra.vposition_analytics_fact AS
+WITH team_positions AS (
+    SELECT p.* FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_infra'
+)
+SELECT position_sk, enterprise_key, position_date, portfolio_sk, security_sk, business_unit_sk,
+    quantity, market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    market_value_usd / NULLIF(SUM(market_value_usd) OVER (PARTITION BY position_date), 0) AS concentration_pct,
+    CAST(DENSE_RANK() OVER (PARTITION BY position_date ORDER BY market_value_usd DESC) AS INT) AS portfolio_rank,
+    currency_code, silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM team_positions;
+
+CREATE OR REPLACE VIEW team_infra.vcontract_details_fact AS
+SELECT c.contract_details_sk, c.enterprise_key, c.detail_date, c.contract_sk, c.entity_sk,
+    c.contract_type, c.principal_usd, c.coupon_rate, c.spread_over_benchmark,
+    c.days_to_maturity, c.status, c.has_active_breach,
+    YEAR(cd.signing_date) AS vintage_year,
+    c.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_details_fact c
+LEFT JOIN investments.vcontract_dim cd ON cd.contract_sk = c.contract_sk AND cd.is_current = TRUE
+WHERE c.contract_sk IN (
+    SELECT DISTINCT cp.contract_sk FROM investments.vtransactions_collateral_positions_fact cp
+    JOIN investments.vposition_analytics_fact p ON p.security_sk = cp.security_sk
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_infra'
+);
+
+CREATE OR REPLACE VIEW team_infra.vcontract_summary_fact AS
+SELECT cs.contract_summary_sk, cs.enterprise_key, cs.summary_date, cs.contract_sk,
+    cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+    cs.performance_status, cs.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_summary_fact cs
+WHERE cs.contract_sk IN (SELECT DISTINCT contract_sk FROM team_infra.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_infra.vportfolio_analytics_fact AS
+SELECT pa.portfolio_analytics_sk, pa.analytics_date, pa.portfolio_sk, pa.business_unit_sk,
+    pa.var_95, pa.var_99, pa.expected_shortfall, pa.period_return_pct, pa.ytd_return_pct,
+    pa.benchmark_return_pct, pa.benchmark_code, pa.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.vportfolio_analytics_fact pa
+JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = pa.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_infra';
+
+CREATE OR REPLACE VIEW team_infra.vsecurity_dim AS
+WITH team_secs AS (
+    SELECT DISTINCT p.security_sk FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_infra'
+)
+SELECT s.security_sk, s.enterprise_key, s.effective_start_date, s.effective_end_date, s.is_current,
+    s.security_name, s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date,
+    s.coupon_rate, s.currency_code, s.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_dim s JOIN team_secs ts ON ts.security_sk = s.security_sk;
+
+CREATE OR REPLACE VIEW team_infra.vsecurity_master_fact AS
+SELECT m.security_master_sk, m.snapshot_date, m.security_sk, m.enterprise_key, m.security_name,
+    m.asset_class, m.latest_close_price_usd, m.days_to_maturity, m.is_matured,
+    m.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_master_fact m
+WHERE m.security_sk IN (SELECT security_sk FROM team_infra.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_infra.vsecurity_price_fact AS
+SELECT sp.security_price_sk, sp.enterprise_key, sp.price_date, sp.security_sk,
+    sp.close_price_usd, sp.currency_code, sp.price_type,
+    sp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_price_fact sp
+WHERE sp.security_sk IN (SELECT security_sk FROM team_infra.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_infra.vsecurity_rating_dim AS
+SELECT sr.security_rating_sk, sr.enterprise_key, sr.effective_start_date, sr.effective_end_date,
+    sr.is_current, sr.security_enterprise_key, sr.rating_agency, sr.rating_value,
+    sr.rating_outlook, sr.rating_numeric_score,
+    sr.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_rating_dim sr
+WHERE sr.security_enterprise_key IN (SELECT enterprise_key FROM team_infra.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_infra.vtransactions_collateral_exposure_fact AS
+SELECT ce.collateral_exposure_sk, ce.enterprise_key, ce.exposure_date, ce.contract_sk,
+    ce.exposure_amount_usd, ce.collateral_value_usd, ce.collateral_type, ce.ltv_pct,
+    ce.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_exposure_fact ce
+WHERE ce.contract_sk IN (SELECT DISTINCT contract_sk FROM team_infra.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_infra.vtransactions_collateral_positions_fact AS
+SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contract_sk,
+    cp.security_sk, cp.position_value_usd, cp.collateral_role,
+    cp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_positions_fact cp
+WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_infra.vcontract_details_fact);
+
+-- ============================================================================
+-- team_public_equity (0.1.2 — non-PD team, mirrors team_pd_distressed shape)
+-- ============================================================================
+CREATE OR REPLACE VIEW team_public_equity.vposition_analytics_fact AS
+WITH team_positions AS (
+    SELECT p.* FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_public_equity'
+)
+SELECT position_sk, enterprise_key, position_date, portfolio_sk, security_sk, business_unit_sk,
+    quantity, market_value_usd, book_value_usd, cost_basis_usd, unrealized_gl_usd,
+    market_value_usd / NULLIF(SUM(market_value_usd) OVER (PARTITION BY position_date), 0) AS concentration_pct,
+    CAST(DENSE_RANK() OVER (PARTITION BY position_date ORDER BY market_value_usd DESC) AS INT) AS portfolio_rank,
+    currency_code, silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM team_positions;
+
+CREATE OR REPLACE VIEW team_public_equity.vcontract_details_fact AS
+SELECT c.contract_details_sk, c.enterprise_key, c.detail_date, c.contract_sk, c.entity_sk,
+    c.contract_type, c.principal_usd, c.coupon_rate, c.spread_over_benchmark,
+    c.days_to_maturity, c.status, c.has_active_breach,
+    YEAR(cd.signing_date) AS vintage_year,
+    c.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_details_fact c
+LEFT JOIN investments.vcontract_dim cd ON cd.contract_sk = c.contract_sk AND cd.is_current = TRUE
+WHERE c.contract_sk IN (
+    SELECT DISTINCT cp.contract_sk FROM investments.vtransactions_collateral_positions_fact cp
+    JOIN investments.vposition_analytics_fact p ON p.security_sk = cp.security_sk
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_public_equity'
+);
+
+CREATE OR REPLACE VIEW team_public_equity.vcontract_summary_fact AS
+SELECT cs.contract_summary_sk, cs.enterprise_key, cs.summary_date, cs.contract_sk,
+    cs.outstanding_principal_usd, cs.accrued_interest_usd, cs.paid_to_date_usd,
+    cs.performance_status, cs.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vcontract_summary_fact cs
+WHERE cs.contract_sk IN (SELECT DISTINCT contract_sk FROM team_public_equity.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_public_equity.vportfolio_analytics_fact AS
+SELECT pa.portfolio_analytics_sk, pa.analytics_date, pa.portfolio_sk, pa.business_unit_sk,
+    pa.var_95, pa.var_99, pa.expected_shortfall, pa.period_return_pct, pa.ytd_return_pct,
+    pa.benchmark_return_pct, pa.benchmark_code, pa.silver_loaded_at,
+    current_timestamp() AS gold_loaded_at
+FROM investments.vportfolio_analytics_fact pa
+JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = pa.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_public_equity';
+
+CREATE OR REPLACE VIEW team_public_equity.vsecurity_dim AS
+WITH team_secs AS (
+    SELECT DISTINCT p.security_sk FROM investments.vposition_analytics_fact p
+    JOIN investments.vbusiness_unit_dim bu ON bu.business_unit_sk = p.business_unit_sk AND bu.is_current = TRUE AND bu.bu_code = 'team_public_equity'
+)
+SELECT s.security_sk, s.enterprise_key, s.effective_start_date, s.effective_end_date, s.is_current,
+    s.security_name, s.asset_class, s.sub_asset_class, s.issue_date, s.maturity_date,
+    s.coupon_rate, s.currency_code, s.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_dim s JOIN team_secs ts ON ts.security_sk = s.security_sk;
+
+CREATE OR REPLACE VIEW team_public_equity.vsecurity_master_fact AS
+SELECT m.security_master_sk, m.snapshot_date, m.security_sk, m.enterprise_key, m.security_name,
+    m.asset_class, m.latest_close_price_usd, m.days_to_maturity, m.is_matured,
+    m.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_master_fact m
+WHERE m.security_sk IN (SELECT security_sk FROM team_public_equity.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_public_equity.vsecurity_price_fact AS
+SELECT sp.security_price_sk, sp.enterprise_key, sp.price_date, sp.security_sk,
+    sp.close_price_usd, sp.currency_code, sp.price_type,
+    sp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_price_fact sp
+WHERE sp.security_sk IN (SELECT security_sk FROM team_public_equity.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_public_equity.vsecurity_rating_dim AS
+SELECT sr.security_rating_sk, sr.enterprise_key, sr.effective_start_date, sr.effective_end_date,
+    sr.is_current, sr.security_enterprise_key, sr.rating_agency, sr.rating_value,
+    sr.rating_outlook, sr.rating_numeric_score,
+    sr.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vsecurity_rating_dim sr
+WHERE sr.security_enterprise_key IN (SELECT enterprise_key FROM team_public_equity.vsecurity_dim);
+
+CREATE OR REPLACE VIEW team_public_equity.vtransactions_collateral_exposure_fact AS
+SELECT ce.collateral_exposure_sk, ce.enterprise_key, ce.exposure_date, ce.contract_sk,
+    ce.exposure_amount_usd, ce.collateral_value_usd, ce.collateral_type, ce.ltv_pct,
+    ce.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_exposure_fact ce
+WHERE ce.contract_sk IN (SELECT DISTINCT contract_sk FROM team_public_equity.vcontract_details_fact);
+
+CREATE OR REPLACE VIEW team_public_equity.vtransactions_collateral_positions_fact AS
+SELECT cp.collateral_position_sk, cp.enterprise_key, cp.position_date, cp.contract_sk,
+    cp.security_sk, cp.position_value_usd, cp.collateral_role,
+    cp.silver_loaded_at, current_timestamp() AS gold_loaded_at
+FROM investments.vtransactions_collateral_positions_fact cp
+WHERE cp.contract_sk IN (SELECT DISTINCT contract_sk FROM team_public_equity.vcontract_details_fact);
+
+
+-- ============================================================================
 -- SECTION G — gold_pd_consolidated (3 cross-team UNION views)
 --
 -- Each consolidated view UNIONs across the PD-team layer and projects
@@ -609,5 +1060,6 @@ SELECT 'gold.views complete' AS status,
        count(*) AS gold_view_count
 FROM information_schema.views
 WHERE table_schema IN ('team_pd_direct_lending','team_pd_distressed','team_pd_mezzanine',
-                       'team_pd_real_estate_debt','team_pd_specialty_finance','gold_pd_consolidated')
+                       'team_pd_real_estate_debt','team_pd_specialty_finance','gold_pd_consolidated',
+                       'team_re_core','team_re_value_add','team_pe_buyout','team_infra','team_public_equity')
   AND table_name LIKE 'v%';

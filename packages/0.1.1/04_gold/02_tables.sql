@@ -216,9 +216,76 @@ CREATE TABLE IF NOT EXISTS gold_pd_consolidated.t_vpd_contract_book (
 COMMENT 'Cross-team PD contract book. UNION ALL across teams.'
 TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported', 'delta.enableRowTracking' = 'true', 'delta.enableChangeDataFeed' = 'true');
 
+-- ============================================================================
+-- SECTIONS G-K (0.1.2) — non-PD team tables. LIKE-cloned from
+-- team_pd_direct_lending; seed already has positions for teams 6-10 so these
+-- get rows on the next orchestrator refresh.
+-- ============================================================================
+
+-- SECTION G — team_re_core
+CREATE TABLE IF NOT EXISTS team_re_core.t_vposition_analytics_fact LIKE team_pd_direct_lending.t_vposition_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vcontract_details_fact LIKE team_pd_direct_lending.t_vcontract_details_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vcontract_summary_fact LIKE team_pd_direct_lending.t_vcontract_summary_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vportfolio_analytics_fact LIKE team_pd_direct_lending.t_vportfolio_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vsecurity_dim LIKE team_pd_direct_lending.t_vsecurity_dim;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vsecurity_master_fact LIKE team_pd_direct_lending.t_vsecurity_master_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vsecurity_price_fact LIKE team_pd_direct_lending.t_vsecurity_price_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vsecurity_rating_dim LIKE team_pd_direct_lending.t_vsecurity_rating_dim;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vtransactions_collateral_exposure_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_exposure_fact;
+CREATE TABLE IF NOT EXISTS team_re_core.t_vtransactions_collateral_positions_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_positions_fact;
+
+-- SECTION H — team_re_value_add
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vposition_analytics_fact LIKE team_pd_direct_lending.t_vposition_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vcontract_details_fact LIKE team_pd_direct_lending.t_vcontract_details_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vcontract_summary_fact LIKE team_pd_direct_lending.t_vcontract_summary_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vportfolio_analytics_fact LIKE team_pd_direct_lending.t_vportfolio_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vsecurity_dim LIKE team_pd_direct_lending.t_vsecurity_dim;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vsecurity_master_fact LIKE team_pd_direct_lending.t_vsecurity_master_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vsecurity_price_fact LIKE team_pd_direct_lending.t_vsecurity_price_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vsecurity_rating_dim LIKE team_pd_direct_lending.t_vsecurity_rating_dim;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vtransactions_collateral_exposure_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_exposure_fact;
+CREATE TABLE IF NOT EXISTS team_re_value_add.t_vtransactions_collateral_positions_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_positions_fact;
+
+-- SECTION I — team_pe_buyout
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vposition_analytics_fact LIKE team_pd_direct_lending.t_vposition_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vcontract_details_fact LIKE team_pd_direct_lending.t_vcontract_details_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vcontract_summary_fact LIKE team_pd_direct_lending.t_vcontract_summary_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vportfolio_analytics_fact LIKE team_pd_direct_lending.t_vportfolio_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vsecurity_dim LIKE team_pd_direct_lending.t_vsecurity_dim;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vsecurity_master_fact LIKE team_pd_direct_lending.t_vsecurity_master_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vsecurity_price_fact LIKE team_pd_direct_lending.t_vsecurity_price_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vsecurity_rating_dim LIKE team_pd_direct_lending.t_vsecurity_rating_dim;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vtransactions_collateral_exposure_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_exposure_fact;
+CREATE TABLE IF NOT EXISTS team_pe_buyout.t_vtransactions_collateral_positions_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_positions_fact;
+
+-- SECTION J — team_infra
+CREATE TABLE IF NOT EXISTS team_infra.t_vposition_analytics_fact LIKE team_pd_direct_lending.t_vposition_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vcontract_details_fact LIKE team_pd_direct_lending.t_vcontract_details_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vcontract_summary_fact LIKE team_pd_direct_lending.t_vcontract_summary_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vportfolio_analytics_fact LIKE team_pd_direct_lending.t_vportfolio_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vsecurity_dim LIKE team_pd_direct_lending.t_vsecurity_dim;
+CREATE TABLE IF NOT EXISTS team_infra.t_vsecurity_master_fact LIKE team_pd_direct_lending.t_vsecurity_master_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vsecurity_price_fact LIKE team_pd_direct_lending.t_vsecurity_price_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vsecurity_rating_dim LIKE team_pd_direct_lending.t_vsecurity_rating_dim;
+CREATE TABLE IF NOT EXISTS team_infra.t_vtransactions_collateral_exposure_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_exposure_fact;
+CREATE TABLE IF NOT EXISTS team_infra.t_vtransactions_collateral_positions_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_positions_fact;
+
+-- SECTION K — team_public_equity
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vposition_analytics_fact LIKE team_pd_direct_lending.t_vposition_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vcontract_details_fact LIKE team_pd_direct_lending.t_vcontract_details_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vcontract_summary_fact LIKE team_pd_direct_lending.t_vcontract_summary_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vportfolio_analytics_fact LIKE team_pd_direct_lending.t_vportfolio_analytics_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vsecurity_dim LIKE team_pd_direct_lending.t_vsecurity_dim;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vsecurity_master_fact LIKE team_pd_direct_lending.t_vsecurity_master_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vsecurity_price_fact LIKE team_pd_direct_lending.t_vsecurity_price_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vsecurity_rating_dim LIKE team_pd_direct_lending.t_vsecurity_rating_dim;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vtransactions_collateral_exposure_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_exposure_fact;
+CREATE TABLE IF NOT EXISTS team_public_equity.t_vtransactions_collateral_positions_fact LIKE team_pd_direct_lending.t_vtransactions_collateral_positions_fact;
+
 SELECT 'gold.tables complete' AS status,
        count(*) AS gold_table_count
 FROM information_schema.tables
 WHERE table_schema IN ('team_pd_direct_lending','team_pd_distressed','team_pd_mezzanine',
-                       'team_pd_real_estate_debt','team_pd_specialty_finance','gold_pd_consolidated')
+                       'team_pd_real_estate_debt','team_pd_specialty_finance','gold_pd_consolidated',
+                       'team_re_core','team_re_value_add','team_pe_buyout','team_infra','team_public_equity')
   AND table_name LIKE 't_v%';

@@ -28,4 +28,19 @@ CREATE SCHEMA IF NOT EXISTS team_pd_specialty_finance
 CREATE SCHEMA IF NOT EXISTS gold_pd_consolidated
     COMMENT 'Cross-team consolidated views UNIONing all 5 PD-strategy teams. Powers the cross-team headline demo query.';
 
+-- ----------------------------------------------------------------------------
+-- 0.1.2: 5 non-PD team schemas. Mirrors the PD-team structure; seeded teams
+-- 6–10 in vbusiness_unit_dim. Strengthens cross-team-MV-reuse demo (S2).
+-- ----------------------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS team_re_core
+    COMMENT 'Real Estate — Core. Core real estate equity strategies.';
+CREATE SCHEMA IF NOT EXISTS team_re_value_add
+    COMMENT 'Real Estate — Value Add. Value-add real estate strategies.';
+CREATE SCHEMA IF NOT EXISTS team_pe_buyout
+    COMMENT 'Private Equity — Buyout. Mid-market and large-cap buyout.';
+CREATE SCHEMA IF NOT EXISTS team_infra
+    COMMENT 'Infrastructure. Infrastructure equity and debt.';
+CREATE SCHEMA IF NOT EXISTS team_public_equity
+    COMMENT 'Public Equity. Listed-equity strategies.';
+
 SELECT 'gold.schemas complete' AS status;
